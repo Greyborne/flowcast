@@ -1,0 +1,60 @@
+version: '3.9'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: flowcast-backend-prod
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: file:/data/flowcast.db
+      API_PORT: 3001
+      CORS_ORIGIN: ${CORS_ORIGIN}
+      JWT_SECRET: ${JWT_SECRET}
+    volumes:
+      - flowcast-data:/data
+    networks:
+      - flowcast-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        VITE_API_URL: /api
+        VITE_WS_URL: ${WS_URL}
+    container_name: flowcast-frontend-prod
+    networks:
+      - flowcast-network
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: flowcast-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - flowcast-network
+    restart: unless-stopped
+
+networks:
+  flowcast-network:
+    driver: bridge
+
+volumes:
+  flowcast-data:
+    driver: local

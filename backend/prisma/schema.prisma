@@ -1,0 +1,188 @@
+// FlowCast — Prisma Schema
+// Database: SQLite (MVP) → PostgreSQL (production)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ── Pay Periods ──────────────────────────────────────────────────────────────
+// Represents each bi-weekly paycheck window. Generated automatically for 2 years.
+model PayPeriod {
+  id             String   @id @default(cuid())
+  startDate      DateTime
+  endDate        DateTime
+  paydayDate     DateTime
+  openingBalance Float    @default(0)
+  // closingBalance is computed from income_entries + bill_instances, cached in BalanceSnapshot
+  isGenerated    Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  incomeEntries    IncomeEntry[]
+  billInstances    BillInstance[]
+  balanceSnapshot  BalanceSnapshot?
+
+  @@index([paydayDate])
+}
+
+// ── Income Sources ───────────────────────────────────────────────────────────
+// Template for recurring income streams.
+model IncomeSource {
+  id                  String           @id @default(cuid())
+  name                String
+  type                IncomeType
+  defaultAmount       Float            @default(0)
+  // For MONTHLY_RECURRING: day of month income arrives
+  dayOfMonth          Int?
+  startDate           DateTime
+  endDate             DateTime?
+  isActive            Boolean          @default(true)
+  // W2: propagate new amount to all future entries when reconciled to different amount
+  propagateOnReconcile Boolean         @default(false)
+  notes               String?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  incomeEntries IncomeEntry[]
+}
+
+enum IncomeType {
+  W2              // Bi-weekly paycheck — propagates on reconcile
+  MONTHLY_RECURRING // Monthly income (retainer, rental) — optional propagation
+  AD_HOC          // One-time income — no propagation
+}
+
+// ── Income Entries ───────────────────────────────────────────────────────────
+// One record per income source per pay period.
+model IncomeEntry {
+  id              String       @id @default(cuid())
+  payPeriodId     String
+  incomeSourceId  String
+  projectedAmount Float
+  actualAmount    Float?
+  isReconciled    Boolean      @default(false)
+  reconciledAt    DateTime?
+  notes           String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  payPeriod    PayPeriod    @relation(fields: [payPeriodId], references: [id], onDelete: Cascade)
+  incomeSource IncomeSource @relation(fields: [incomeSourceId], references: [id], onDelete: Cascade)
+
+  @@unique([payPeriodId, incomeSourceId])
+  @@index([payPeriodId])
+  @@index([incomeSourceId])
+}
+
+// ── Bill Templates ───────────────────────────────────────────────────────────
+// Master record for a recurring bill.
+model BillTemplate {
+  id           String      @id @default(cuid())
+  name         String
+  group        String      // e.g. "1. Long-Term Credit", "2. Bills", "6. Discretionary"
+  billType     BillType
+  dueDayOfMonth Int?       // Day of month the bill is due (DOT column in spreadsheet)
+  defaultAmount Float      @default(0)
+  isActive     Boolean     @default(true)
+  isDiscretionary Boolean  @default(false) // Discretionary = pulled from transactions, not template
+  sortOrder    Int         @default(0)
+  notes        String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  billInstances  BillInstance[]
+  monthlyAmounts BillMonthlyAmount[]
+}
+
+enum BillType {
+  EXPENSE
+  TRANSFER
+  SAVINGS
+}
+
+// ── Bill Monthly Amounts ─────────────────────────────────────────────────────
+// Per-month amount for each bill (mirrors the Categories tab in Google Sheets).
+// This is the two-layer system: template default + per-month override.
+model BillMonthlyAmount {
+  id             String       @id @default(cuid())
+  billTemplateId String
+  year           Int
+  month          Int          // 1–12
+  amount         Float
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  billTemplate BillTemplate @relation(fields: [billTemplateId], references: [id], onDelete: Cascade)
+
+  @@unique([billTemplateId, year, month])
+  @@index([billTemplateId])
+}
+
+// ── Bill Instances ───────────────────────────────────────────────────────────
+// One record per bill per pay period (computed from BillTemplate + BillMonthlyAmount).
+model BillInstance {
+  id              String       @id @default(cuid())
+  payPeriodId     String
+  billTemplateId  String
+  projectedAmount Float        // Pulled from BillMonthlyAmount for this period's month
+  actualAmount    Float?       // Entered when reconciling
+  isReconciled    Boolean      @default(false)
+  isFrozen        Boolean      @default(false) // Cannot be changed once frozen
+  reconciledAt    DateTime?
+  notes           String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  payPeriod    PayPeriod    @relation(fields: [payPeriodId], references: [id], onDelete: Cascade)
+  billTemplate BillTemplate @relation(fields: [billTemplateId], references: [id], onDelete: Cascade)
+
+  @@unique([payPeriodId, billTemplateId])
+  @@index([payPeriodId])
+  @@index([billTemplateId])
+}
+
+// ── Balance Snapshots ────────────────────────────────────────────────────────
+// Cached projected closing balance per pay period.
+// Invalidated and recomputed when any reconciliation fires.
+model BalanceSnapshot {
+  id               String    @id @default(cuid())
+  payPeriodId      String    @unique
+  plannedBalance   Float     // Based on templates/projections
+  runningBalance   Float     // Based on reconciled actuals
+  totalIncome      Float
+  totalExpenses    Float
+  isStale          Boolean   @default(false)
+  computedAt       DateTime  @default(now())
+
+  payPeriod PayPeriod @relation(fields: [payPeriodId], references: [id], onDelete: Cascade)
+}
+
+// ── Reconciliation Log ───────────────────────────────────────────────────────
+// Audit trail for every reconciliation action.
+model ReconciliationLog {
+  id              String   @id @default(cuid())
+  resourceType    String   // "income" | "bill" | "balance"
+  resourceId      String
+  action          String   // "reconcile" | "unreconcile" | "propagate" | "set_balance"
+  previousValue   Float?
+  newValue        Float?
+  periodsAffected Int      @default(1)
+  notes           String?
+  createdAt       DateTime @default(now())
+
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+}
+
+// ── App Settings ─────────────────────────────────────────────────────────────
+// Key-value store for app-wide settings.
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
