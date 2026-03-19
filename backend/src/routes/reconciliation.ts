@@ -12,11 +12,11 @@ const router = Router();
 // POST /api/reconciliation/income/:id — reconcile an income entry
 router.post('/income/:id', async (req: Request, res: Response) => {
   try {
-    const { actualAmount, notes } = req.body;
+    const { actualAmount, notes, cascade } = req.body;
     if (typeof actualAmount !== 'number') {
       return res.status(400).json({ error: 'actualAmount (number) is required' });
     }
-    await reconcileIncome({ incomeEntryId: req.params.id, actualAmount, notes });
+    await reconcileIncome({ incomeEntryId: req.params.id, actualAmount, notes, cascade });
     res.json({ success: true, message: 'Income reconciled and cascade complete' });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Reconciliation failed' });
@@ -36,11 +36,11 @@ router.delete('/income/:id', async (req: Request, res: Response) => {
 // POST /api/reconciliation/bill/:id — reconcile a bill instance
 router.post('/bill/:id', async (req: Request, res: Response) => {
   try {
-    const { actualAmount, notes } = req.body;
+    const { actualAmount, notes, cascade } = req.body;
     if (typeof actualAmount !== 'number') {
       return res.status(400).json({ error: 'actualAmount (number) is required' });
     }
-    await reconcileBill({ billInstanceId: req.params.id, actualAmount, notes });
+    await reconcileBill({ billInstanceId: req.params.id, actualAmount, notes, cascade });
     res.json({ success: true, message: 'Bill reconciled and frozen' });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Reconciliation failed' });

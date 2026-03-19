@@ -20,12 +20,14 @@ export interface ReconcileIncomePayload {
   incomeEntryId: string;
   actualAmount: number;
   notes?: string;
+  cascade?: boolean;
 }
 
 export interface ReconcileBillPayload {
   billInstanceId: string;
   actualAmount: number;
   notes?: string;
+  cascade?: boolean;
 }
 
 /**
@@ -33,7 +35,7 @@ export interface ReconcileBillPayload {
  * For W2 income with a changed amount, propagates to all future unreconciled entries.
  */
 export async function reconcileIncome(payload: ReconcileIncomePayload): Promise<void> {
-  const { incomeEntryId, actualAmount, notes } = payload;
+  const { incomeEntryId, actualAmount, notes, cascade = true } = payload;
 
   const entry = await prisma.incomeEntry.findUniqueOrThrow({
     where: { id: incomeEntryId },
@@ -66,13 +68,9 @@ export async function reconcileIncome(payload: ReconcileIncomePayload): Promise<
     },
   });
 
-  // W2 propagation: if amount changed, update ALL future unreconciled W2 entries
+  // Cascade: update all future unreconciled entries for this source
   let periodsAffected = 1;
-  if (
-    entry.incomeSource.type === 'W2' &&
-    entry.incomeSource.propagateOnReconcile &&
-    actualAmount !== entry.projectedAmount
-  ) {
+  if (cascade) {
     const futureEntries = await prisma.incomeEntry.findMany({
       where: {
         incomeSourceId: entry.incomeSourceId,
@@ -83,26 +81,10 @@ export async function reconcileIncome(payload: ReconcileIncomePayload): Promise<
 
     if (futureEntries.length > 0) {
       await prisma.incomeEntry.updateMany({
-        where: {
-          id: { in: futureEntries.map((e) => e.id) },
-        },
+        where: { id: { in: futureEntries.map((e) => e.id) } },
         data: { projectedAmount: actualAmount },
       });
 
-      // Log propagation
-      await prisma.reconciliationLog.create({
-        data: {
-          resourceType: 'income',
-          resourceId: entry.incomeSourceId,
-          action: 'propagate',
-          previousValue: entry.projectedAmount,
-          newValue: actualAmount,
-          periodsAffected: futureEntries.length,
-          notes: `W2 propagation from reconcile of ${incomeEntryId}`,
-        },
-      });
-
-      // Also update the income source default amount
       await prisma.incomeSource.update({
         where: { id: entry.incomeSourceId },
         data: { defaultAmount: actualAmount },
@@ -153,11 +135,11 @@ export async function unreconcileIncome(incomeEntryId: string): Promise<void> {
  * Freezes the record after reconciliation.
  */
 export async function reconcileBill(payload: ReconcileBillPayload): Promise<void> {
-  const { billInstanceId, actualAmount, notes } = payload;
+  const { billInstanceId, actualAmount, notes, cascade = true } = payload;
 
   const instance = await prisma.billInstance.findUniqueOrThrow({
     where: { id: billInstanceId },
-    include: { billTemplate: true },
+    include: { billTemplate: true, payPeriod: true },
   });
 
   if (instance.isFrozen) {
@@ -187,6 +169,23 @@ export async function reconcileBill(payload: ReconcileBillPayload): Promise<void
       notes,
     },
   });
+
+  // Cascade: update projected amount on all future unreconciled instances of this template
+  if (cascade) {
+    const future = await prisma.billInstance.findMany({
+      where: {
+        billTemplateId: instance.billTemplateId,
+        isReconciled: false,
+        payPeriod: { paydayDate: { gt: instance.payPeriod.paydayDate } },
+      },
+    });
+    if (future.length > 0) {
+      await prisma.billInstance.updateMany({
+        where: { id: { in: future.map((i) => i.id) } },
+        data: { projectedAmount: actualAmount },
+      });
+    }
+  }
 
   const affectedIds = await recomputeFromPeriod(instance.payPeriodId);
   broadcast({ type: 'BALANCE_UPDATE', payPeriodIds: affectedIds });

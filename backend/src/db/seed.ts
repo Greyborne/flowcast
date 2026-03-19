@@ -7,7 +7,7 @@
  * Run with: npm run db:seed
  */
 
-import { PrismaClient, IncomeType, BillType } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import { addDays, addWeeks, startOfDay } from 'date-fns';
 
 const prisma = new PrismaClient();
@@ -23,9 +23,9 @@ async function generatePayPeriods() {
   const periods = [];
 
   for (let i = 0; i < PERIODS_COUNT; i++) {
-    const paydayDate = addWeeks(FIRST_PAYDAY, i);
-    const startDate = i === 0 ? paydayDate : addDays(addWeeks(FIRST_PAYDAY, i - 1), 1);
-    const endDate = addDays(paydayDate, 13);
+    const paydayDate = addWeeks(FIRST_PAYDAY, i * 2);   // bi-weekly: every 2 weeks
+    const startDate  = paydayDate;                       // period starts on payday
+    const endDate    = addDays(paydayDate, 13);          // covers 14 days (day 0–13)
 
     periods.push({
       startDate: startOfDay(startDate),
@@ -35,7 +35,7 @@ async function generatePayPeriods() {
     });
   }
 
-  await prisma.payPeriod.createMany({ data: periods, skipDuplicates: true });
+  await prisma.payPeriod.createMany({ data: periods });
   console.log(`✓ Created ${periods.length} pay periods`);
 }
 
@@ -95,28 +95,28 @@ const BILL_TEMPLATES = [
 const INCOME_SOURCES = [
   {
     name: 'Paycheck',
-    type: IncomeType.W2,
+    type: "W2",
     defaultAmount: 2583.77,
     propagateOnReconcile: true,
     startDate: new Date('2026-01-01'),
   },
   {
     name: 'Freelance',
-    type: IncomeType.MONTHLY_RECURRING,
+    type: "MONTHLY_RECURRING",
     defaultAmount: 0,
     propagateOnReconcile: false,
     startDate: new Date('2026-01-01'),
   },
   {
     name: 'CT Tech Salary',
-    type: IncomeType.MONTHLY_RECURRING,
+    type: "MONTHLY_RECURRING",
     defaultAmount: 0,
     propagateOnReconcile: false,
     startDate: new Date('2026-01-01'),
   },
   {
     name: 'Misc Income',
-    type: IncomeType.AD_HOC,
+    type: "AD_HOC",
     defaultAmount: 0,
     propagateOnReconcile: false,
     startDate: new Date('2026-01-01'),
@@ -132,11 +132,11 @@ async function main() {
   for (const bill of BILL_TEMPLATES) {
     await prisma.billTemplate.upsert({
       where: { id: bill.name }, // Use name as temporary key
-      create: { ...bill, billType: BillType.EXPENSE, isDiscretionary: bill.isDiscretionary ?? false },
+      create: { ...bill, billType: "EXPENSE", isDiscretionary: bill.isDiscretionary ?? false },
       update: { defaultAmount: bill.defaultAmount },
     }).catch(() =>
       prisma.billTemplate.create({
-        data: { ...bill, billType: BillType.EXPENSE, isDiscretionary: bill.isDiscretionary ?? false },
+        data: { ...bill, billType: "EXPENSE", isDiscretionary: bill.isDiscretionary ?? false },
       })
     );
   }

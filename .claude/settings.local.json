@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker ps:*)",
+      "Bash(curl -s http://localhost:3001/api/pay-periods)",
+      "Bash(curl -s http://localhost:3001/api/bills)",
+      "Bash(docker exec:*)",
+      "Bash(docker restart:*)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f''''Pay periods: {len\\(d\\)}, first: {d[0][startDate] if d else none}''''\\)\")",
+      "Bash(curl -s http://localhost:3000)",
+      "Bash(node -e \"const d=JSON.parse\\(require\\(''''fs''''\\).readFileSync\\(''''/dev/stdin'''',''''utf8''''\\)\\); console.log\\(''''Count:'''',d.length,''''| Snapshots:'''',d.filter\\(p=>p.balanceSnapshot\\).length,''''| First:'''',d[0]?.paydayDate?.slice\\(0,10\\)\\)\")",
+      "Bash(curl -s \"http://localhost:3001/api/pay-periods\" -o /tmp/pp.json)",
+      "Bash(node -e \"const d=require\\(''/tmp/pp.json''\\); console.log\\(''Count:'',d.length,''| Snapshots:'',d.filter\\(p=>p.balanceSnapshot\\).length,''| First:'',d[0]?.paydayDate?.slice\\(0,10\\)\\)\")",
+      "Bash(curl -s \"http://localhost:3001/api/pay-periods\" -o \"%TEMP%\\\\pp.json\")",
+      "Bash(node -e \"const d=require\\(process.env.TEMP+''\\\\\\\\pp.json''\\); console.log\\(''Count:'',d.length,''| Snapshots:'',d.filter\\(p=>p.balanceSnapshot\\).length,''| First payday:'',d[0]?.paydayDate?.slice\\(0,10\\),''| Last payday:'',d[d.length-1]?.paydayDate?.slice\\(0,10\\)\\)\")",
+      "Bash(node -e \"const d=require\\(''C:/Users/chaz/AppData/Local/Temp/pp.json''\\); const s=d.filter\\(p=>p.balanceSnapshot\\); console.log\\(''Snapshots:'',s.length+''/''+d.length\\); const f=s[0]; console.log\\(''Period 1 \\(''+f.paydayDate.slice\\(0,10\\)+''\\):'', JSON.stringify\\(f.balanceSnapshot,null,2\\)\\)\")",
+      "Bash(node -e \"const d=require\\(''C:/Users/chaz/AppData/Local/Temp/pp.json''\\); const nonzero=d.filter\\(p=>p.balanceSnapshot?.totalIncome>0\\); console.log\\(''Periods with income:'',nonzero.length\\); if\\(nonzero[0]\\) { const f=nonzero[0]; console.log\\(''First non-zero \\(''+f.paydayDate.slice\\(0,10\\)+''\\):'', JSON.stringify\\(f.balanceSnapshot\\)\\); }\")",
+      "Bash(node -e \"const d=require\\(''C:/Users/chaz/AppData/Local/Temp/pp.json''\\); const s=d.filter\\(p=>p.balanceSnapshot?.totalIncome>0\\); console.log\\(''Periods with income:'',s.length+''/''+d.length\\); if\\(s[0]\\){const f=s[0]; console.log\\(''Sample \\(''+f.paydayDate.slice\\(0,10\\)+''\\):'', JSON.stringify\\(f.balanceSnapshot\\)\\)}\")",
+      "Bash(node -e \"const d=require\\(''C:/Users/chaz/AppData/Local/Temp/pp.json''\\); console.log\\(''Total periods:'',d.length,''| With snapshots:'',d.filter\\(p=>p.balanceSnapshot\\).length,''| Sample snap:'',JSON.stringify\\(d[1]?.balanceSnapshot\\)\\)\")",
+      "Bash(docker kill:*)",
+      "Bash(node -e \":*)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\chaz\\AppData\\Local\\Temp"
+    ]
+  }
+}

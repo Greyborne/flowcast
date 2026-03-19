@@ -108,3 +108,28 @@ export interface ReconcilePayload {
   actualAmount: number;
   notes?: string;
 }
+
+export interface IncomeGridEntry {
+  id: string;
+  projectedAmount: number;
+  actualAmount: number | null;
+  isReconciled: boolean;
+}
+
+export interface IncomeGridData {
+  sources: IncomeSource[];
+  entryMap: Record<string, Record<string, IncomeGridEntry>>;
+}
+
+export interface BillGridInstance {
+  id: string;
+  projectedAmount: number;
+  actualAmount: number | null;
+  isReconciled: boolean;
+  isFrozen: boolean;
+}
+
+export interface BillGridData {
+  templates: BillTemplate[];
+  instanceMap: Record<string, Record<string, BillGridInstance>>;
+}

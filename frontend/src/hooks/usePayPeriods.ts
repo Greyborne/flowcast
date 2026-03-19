@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import axios from 'axios';
-import type { PayPeriod } from '../types';
+import type { PayPeriod, BillGridData, IncomeGridData } from '../types';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -9,6 +9,26 @@ export function usePayPeriods() {
     queryKey: ['payPeriods'],
     queryFn: async () => {
       const { data } = await axios.get(`${API}/api/pay-periods`);
+      return data;
+    },
+  });
+}
+
+export function useBillGrid() {
+  return useQuery<BillGridData>({
+    queryKey: ['billGrid'],
+    queryFn: async () => {
+      const { data } = await axios.get(`${API}/api/bills/grid`);
+      return data;
+    },
+  });
+}
+
+export function useIncomeGrid() {
+  return useQuery<IncomeGridData>({
+    queryKey: ['incomeGrid'],
+    queryFn: async () => {
+      const { data } = await axios.get(`${API}/api/income/grid`);
       return data;
     },
   });

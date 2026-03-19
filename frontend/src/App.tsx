@@ -25,8 +25,9 @@ export default function App() {
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === 'BALANCE_UPDATE') {
-            // Invalidate pay period queries so React Query refetches updated data
             queryClient.invalidateQueries({ queryKey: ['payPeriods'] });
+            queryClient.invalidateQueries({ queryKey: ['billGrid'] });
+            queryClient.invalidateQueries({ queryKey: ['incomeGrid'] });
             console.log('[FlowCast] Balance update received, refreshing grid');
           }
         } catch {

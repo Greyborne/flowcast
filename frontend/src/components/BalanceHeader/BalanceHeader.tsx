@@ -76,7 +76,7 @@ export default function BalanceHeader() {
         </p>
         <p className="text-xs text-gray-500 mt-1">
           {currentPeriod
-            ? new Date(currentPeriod.paydayDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+            ? new Date(currentPeriod.paydayDate.slice(0, 10) + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
             : '—'}
         </p>
       </div>
