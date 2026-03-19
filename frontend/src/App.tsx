@@ -1,12 +1,14 @@
 import { useEffect } from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import Layout from './components/Layout/Layout';
 import ProjectionGrid from './components/ProjectionGrid/ProjectionGrid';
 import BalanceHeader from './components/BalanceHeader/BalanceHeader';
+import SettingsPage from './pages/SettingsPage';
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3001/ws';
 
-export default function App() {
+function AppContent() {
   const queryClient = useQueryClient();
 
   // ── WebSocket — real-time balance updates ─────────────────────────────────
@@ -55,8 +57,23 @@ export default function App() {
 
   return (
     <Layout>
-      <BalanceHeader />
-      <ProjectionGrid />
+      <Routes>
+        <Route path="/" element={
+          <>
+            <BalanceHeader />
+            <ProjectionGrid />
+          </>
+        } />
+        <Route path="/settings" element={<SettingsPage />} />
+      </Routes>
     </Layout>
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AppContent />
+    </BrowserRouter>
   );
 }

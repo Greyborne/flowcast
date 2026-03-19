@@ -9,9 +9,14 @@ export default function BalanceHeader() {
   const [editing, setEditing] = useState(false);
   const [inputValue, setInputValue] = useState('');
 
-  const currentPeriod = periods?.find(
-    (p) => new Date(p.paydayDate) >= new Date()
-  );
+  const today = new Date();
+  const currentPeriod =
+    // First try: period whose window contains today
+    periods?.find(
+      (p) => new Date(p.startDate) <= today && new Date(p.endDate) >= today
+    ) ??
+    // Fallback: next upcoming period (future anchor)
+    periods?.find((p) => new Date(p.paydayDate) >= today);
   const snapshot = currentPeriod?.balanceSnapshot;
 
   const handleSetBalance = async () => {

@@ -149,11 +149,19 @@ async function main() {
   console.log(`✓ Created ${INCOME_SOURCES.length} income sources`);
 
   // Seed app settings
-  await prisma.appSetting.upsert({
-    where: { key: 'currentBankBalance' },
-    create: { key: 'currentBankBalance', value: '252.98' },
-    update: {},
-  });
+  const defaultSettings = [
+    { key: 'currentBankBalance', value: '252.98' },
+    { key: 'payScheduleAnchor',  value: '2026-03-14' }, // First/anchor payday
+    { key: 'payFrequency',       value: 'biweekly' },   // weekly | biweekly | monthly
+    { key: 'projectionYears',    value: '2' },
+  ];
+  for (const setting of defaultSettings) {
+    await prisma.appSetting.upsert({
+      where: { key: setting.key },
+      create: setting,
+      update: {},
+    });
+  }
   console.log('✓ Seeded app settings');
 
   console.log('\n✅ Database seeded successfully!\n');
