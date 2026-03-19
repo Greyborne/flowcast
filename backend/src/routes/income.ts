@@ -121,4 +121,30 @@ router.put('/:id', async (req: Request, res: Response) => {
   }
 });
 
+// PATCH /api/income/:id/archive — soft-delete
+router.patch('/:id/archive', async (req: Request, res: Response) => {
+  try {
+    const source = await prisma.incomeSource.update({
+      where: { id: req.params.id },
+      data: { isActive: false },
+    });
+    res.json(source);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// PATCH /api/income/:id/restore — restore archived source
+router.patch('/:id/restore', async (req: Request, res: Response) => {
+  try {
+    const source = await prisma.incomeSource.update({
+      where: { id: req.params.id },
+      data: { isActive: true },
+    });
+    res.json(source);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 export default router;

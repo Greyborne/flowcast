@@ -134,6 +134,32 @@ router.put('/:id', async (req: Request, res: Response) => {
   }
 });
 
+// PATCH /api/bills/:id/archive — soft-delete (isActive: false)
+router.patch('/:id/archive', async (req: Request, res: Response) => {
+  try {
+    const bill = await prisma.billTemplate.update({
+      where: { id: req.params.id },
+      data: { isActive: false },
+    });
+    res.json(bill);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// PATCH /api/bills/:id/restore — restore archived template
+router.patch('/:id/restore', async (req: Request, res: Response) => {
+  try {
+    const bill = await prisma.billTemplate.update({
+      where: { id: req.params.id },
+      data: { isActive: true },
+    });
+    res.json(bill);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // PUT /api/bills/:id/monthly/:year/:month — set amount for a specific month
 router.put('/:id/monthly/:year/:month', async (req: Request, res: Response) => {
   try {
