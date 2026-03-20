@@ -132,4 +132,5 @@ export interface BillGridInstance {
 export interface BillGridData {
   templates: BillTemplate[];
   instanceMap: Record<string, Record<string, BillGridInstance>>;
+  groups: string[];
 }

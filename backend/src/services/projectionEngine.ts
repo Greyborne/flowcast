@@ -85,6 +85,35 @@ export function billFallsInPeriod(
 }
 
 /**
+ * Determines if a MONTHLY_RECURRING income source falls within a pay period.
+ * Uses the source's dayOfMonth directly (no +1 offset like bills use).
+ */
+export function incomeFallsInPeriod(
+  dayOfMonth: number,
+  periodStart: Date,
+  periodEnd: Date
+): boolean {
+  const checkMonth = (year: number, month: number): boolean => {
+    try {
+      const incomeDate = setDate(new Date(year, month - 1, 1), dayOfMonth);
+      return isWithinInterval(incomeDate, {
+        start: periodStart,
+        end: periodEnd,          // inclusive — income has no DOT+1 offset unlike bills
+      });
+    } catch {
+      return false;
+    }
+  };
+
+  const startYear  = getYear(periodStart);
+  const startMonth = getMonth(periodStart) + 1;
+  const nextMonth  = startMonth === 12 ? 1 : startMonth + 1;
+  const nextYear   = startMonth === 12 ? startYear + 1 : startYear;
+
+  return checkMonth(startYear, startMonth) || checkMonth(nextYear, nextMonth);
+}
+
+/**
  * Get the projected amount for a bill in a given month from BillMonthlyAmount.
  * Falls back to the template's defaultAmount if no monthly override exists.
  */

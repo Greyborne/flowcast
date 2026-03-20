@@ -199,9 +199,8 @@ async function populateNewPeriods(newPaydays: Date[], periodLength: number): Pro
     prisma.incomeSource.findMany({ where: { isActive: true } }),
   ]);
 
-  // Dynamically import billFallsInPeriod to avoid circular deps
-  const { billFallsInPeriod } = await import('../services/projectionEngine');
-  const { getBillAmountForMonth } = await import('../services/projectionEngine');
+  // Dynamically import helpers to avoid circular deps
+  const { billFallsInPeriod, getBillAmountForMonth, incomeFallsInPeriod } = await import('../services/projectionEngine');
 
   for (const payday of newPaydays) {
     const period = await prisma.payPeriod.findFirst({
@@ -227,8 +226,13 @@ async function populateNewPeriods(newPaydays: Date[], periodLength: number): Pro
       });
     }
 
-    // Create income entries for all active sources
+    // Create income entries — MONTHLY_RECURRING sources only land in the period
+    // where their dayOfMonth falls (mirrors bill due-day logic).
+    // W2 and AD_HOC sources appear in every period.
     for (const source of activeSources) {
+      if (source.type === 'MONTHLY_RECURRING' && source.dayOfMonth !== null) {
+        if (!incomeFallsInPeriod(source.dayOfMonth, periodStart, periodEnd)) continue;
+      }
       await prisma.incomeEntry.upsert({
         where: { payPeriodId_incomeSourceId: { payPeriodId: period.id, incomeSourceId: source.id } },
         create: { payPeriodId: period.id, incomeSourceId: source.id, projectedAmount: source.defaultAmount },

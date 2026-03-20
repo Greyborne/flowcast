@@ -43,6 +43,7 @@ model IncomeSource {
   endDate              DateTime?
   isActive             Boolean   @default(true)
   propagateOnReconcile Boolean   @default(false)
+  sortOrder            Int       @default(9999)
   notes                String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt

@@ -1,6 +1,6 @@
 import { useState, Fragment, useRef, useEffect } from 'react';
 import axios from 'axios';
-import { usePayPeriods, useBillGrid, useIncomeGrid } from '../../hooks/usePayPeriods';
+import { usePayPeriods, useBillGrid, useIncomeGrid, useCreateAdhocBill } from '../../hooks/usePayPeriods';
 import type { PayPeriod, BillTemplate, BillGridInstance, IncomeSource, IncomeGridEntry } from '../../types';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001';
@@ -31,6 +31,7 @@ export default function ProjectionGrid() {
   const [visibleCount,     setVisibleCount]     = useState(12);
   const [activeCell,       setActiveCell]       = useState<ActiveCell>(null);
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
+  const createAdhoc = useCreateAdhocBill();
 
   if (periodsLoading || billsLoading || incomeLoading) {
     return (
@@ -60,12 +61,17 @@ export default function ProjectionGrid() {
     : null;
 
   const groups = billGrid
-    ? Object.entries(
-        billGrid.templates.reduce<Record<string, BillTemplate[]>>((acc, t) => {
+    ? (() => {
+        const byGroup = billGrid.templates.reduce<Record<string, BillTemplate[]>>((acc, t) => {
           (acc[t.group] ??= []).push(t);
           return acc;
-        }, {})
-      ).sort(([a], [b]) => a.localeCompare(b))
+        }, {});
+        // Sort by the persisted billGroups order; unknown groups fall to the end
+        const orderMap = Object.fromEntries(billGrid.groups.map((g, i) => [g, i]));
+        return Object.entries(byGroup).sort(([a], [b]) =>
+          (orderMap[a] ?? 9999) - (orderMap[b] ?? 9999)
+        );
+      })()
     : [];
 
   const togglePeriod = (id: string) =>
@@ -181,6 +187,9 @@ export default function ProjectionGrid() {
                     activeCell={activeCell}
                     setActiveCell={setActiveCell}
                     selectedPeriodId={selectedPeriodId}
+                    onCreateAdhoc={(payPeriodId) =>
+                      createAdhoc.mutate({ billTemplateId: template.id, payPeriodId })
+                    }
                   />
                 ))}
               </Fragment>
@@ -436,7 +445,7 @@ function IncomeRow({
 // ── Bill row ──────────────────────────────────────────────────────────────────
 
 function BillRow({
-  template, periods, instanceMap, activeCell, setActiveCell, selectedPeriodId,
+  template, periods, instanceMap, activeCell, setActiveCell, selectedPeriodId, onCreateAdhoc,
 }: {
   template: BillTemplate;
   periods: PayPeriod[];
@@ -444,9 +453,10 @@ function BillRow({
   activeCell: ActiveCell;
   setActiveCell: (c: ActiveCell) => void;
   selectedPeriodId: string | null;
+  onCreateAdhoc: (payPeriodId: string) => void;
 }) {
   return (
-    <tr className="border-b border-gray-800/60 hover:bg-gray-900/40">
+    <tr className="border-b border-gray-800/60 hover:bg-gray-900/40 group/row">
       <td className="sticky left-0 bg-gray-950 py-2 px-4 text-xs text-gray-300 border-r border-gray-800 z-10 whitespace-nowrap">
         {template.name}
         {template.dueDayOfMonth != null && (
@@ -459,7 +469,13 @@ function BillRow({
         if (!inst) {
           return (
             <td key={p.id} className={`py-2 px-4 text-center text-gray-800 text-xs ${isSel ? 'bg-blue-950/20' : ''}`}>
-              —
+              <button
+                onClick={() => onCreateAdhoc(p.id)}
+                title={`Add ${template.name} to this period`}
+                className="opacity-0 group-hover/row:opacity-100 text-gray-600 hover:text-blue-400 transition-all text-xs leading-none"
+              >
+                +
+              </button>
             </td>
           );
         }

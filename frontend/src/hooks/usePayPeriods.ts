@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import type { PayPeriod, BillGridData, IncomeGridData } from '../types';
 
@@ -30,6 +30,24 @@ export function useIncomeGrid() {
     queryFn: async () => {
       const { data } = await axios.get(`${API}/api/income/grid`);
       return data;
+    },
+  });
+}
+
+export function useCreateAdhocBill() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ billTemplateId, payPeriodId, projectedAmount }: {
+      billTemplateId: string;
+      payPeriodId: string;
+      projectedAmount?: number;
+    }) => {
+      const { data } = await axios.post(`${API}/api/bills/adhoc`, { billTemplateId, payPeriodId, projectedAmount });
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['billGrid'] });
+      qc.invalidateQueries({ queryKey: ['payPeriods'] });
     },
   });
 }

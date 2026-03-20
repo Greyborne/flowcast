@@ -8,7 +8,7 @@ const router = Router();
 // GET /api/income — list all income sources
 router.get('/', async (_req: Request, res: Response) => {
   try {
-    const sources = await prisma.incomeSource.findMany({ orderBy: { name: 'asc' } });
+    const sources = await prisma.incomeSource.findMany({ orderBy: { sortOrder: 'asc' } });
     res.json(sources);
   } catch {
     res.status(500).json({ error: 'Failed to fetch income sources' });
@@ -21,7 +21,7 @@ router.get('/grid', async (_req: Request, res: Response) => {
     const [sources, entries] = await Promise.all([
       prisma.incomeSource.findMany({
         where: { isActive: true },
-        orderBy: { name: 'asc' },
+        orderBy: { sortOrder: 'asc' },
       }),
       prisma.incomeEntry.findMany({
         select: {
@@ -98,24 +98,139 @@ router.patch('/entry/:id', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Reorder all income sources so they have clean 1-based sortOrders.
+ * sourceId is inserted after positionAfterId (null = first).
+ */
+async function reorderIncome(sourceId: string, positionAfterId: string | null): Promise<void> {
+  const siblings = await prisma.incomeSource.findMany({
+    where: { id: { not: sourceId } },
+    orderBy: { sortOrder: 'asc' },
+  });
+
+  let insertIndex: number;
+  if (positionAfterId === null) {
+    insertIndex = 0;
+  } else {
+    const idx = siblings.findIndex((s) => s.id === positionAfterId);
+    insertIndex = idx === -1 ? siblings.length : idx + 1;
+  }
+
+  const reordered = [
+    ...siblings.slice(0, insertIndex),
+    { id: sourceId },
+    ...siblings.slice(insertIndex),
+  ];
+
+  for (let i = 0; i < reordered.length; i++) {
+    await prisma.incomeSource.update({
+      where: { id: reordered[i].id },
+      data: { sortOrder: i + 1 },
+    });
+  }
+}
+
 // POST /api/income — create an income source
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const source = await prisma.incomeSource.create({ data: req.body });
-    res.status(201).json(source);
+    const { positionAfterId, ...rest } = req.body;
+    const source = await prisma.incomeSource.create({ data: { ...rest, sortOrder: 9999 } });
+    await reorderIncome(source.id, positionAfterId !== undefined ? positionAfterId : source.id);
+    const updated = await prisma.incomeSource.findUniqueOrThrow({ where: { id: source.id } });
+    res.status(201).json(updated);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
 });
 
+/**
+ * Resync future unreconciled entries for a MONTHLY_RECURRING source:
+ * - Deletes unreconciled entries in periods where dayOfMonth doesn't fall
+ * - Upserts entries with the correct amount in periods where it does
+ * Returns the earliest affected payPeriodId for recomputation, or null if none.
+ */
+async function resyncMonthlyEntries(sourceId: string, dayOfMonth: number, amount: number): Promise<string | null> {
+  const { incomeFallsInPeriod } = await import('../services/projectionEngine');
+  const today = new Date();
+
+  const futurePeriods = await prisma.payPeriod.findMany({
+    where: { paydayDate: { gte: today } },
+    orderBy: { paydayDate: 'asc' },
+  });
+  if (futurePeriods.length === 0) return null;
+
+  for (const period of futurePeriods) {
+    const falls = incomeFallsInPeriod(dayOfMonth, period.startDate, period.endDate);
+    const existing = await prisma.incomeEntry.findFirst({
+      where: { incomeSourceId: sourceId, payPeriodId: period.id },
+    });
+
+    if (!falls) {
+      // Remove unreconciled entry that doesn't belong in this period
+      if (existing && !existing.isReconciled) {
+        await prisma.incomeEntry.delete({ where: { id: existing.id } });
+      }
+    } else {
+      // Upsert entry with correct amount
+      if (!existing) {
+        await prisma.incomeEntry.create({
+          data: { incomeSourceId: sourceId, payPeriodId: period.id, projectedAmount: amount },
+        });
+      } else if (!existing.isReconciled) {
+        await prisma.incomeEntry.update({
+          where: { id: existing.id },
+          data: { projectedAmount: amount },
+        });
+      }
+    }
+  }
+
+  return futurePeriods[0].id;
+}
+
 // PUT /api/income/:id — update an income source
 router.put('/:id', async (req: Request, res: Response) => {
   try {
+    const { name, type, defaultAmount, isActive, propagateOnReconcile, dayOfMonth, endDate, notes, positionAfterId, cascadeDefault } = req.body;
     const source = await prisma.incomeSource.update({
       where: { id: req.params.id },
-      data: req.body,
+      data: { name, type, defaultAmount, isActive, propagateOnReconcile, dayOfMonth, endDate, notes },
     });
-    res.json(source);
+    if ('positionAfterId' in req.body) {
+      await reorderIncome(req.params.id, positionAfterId);
+    }
+
+    // For MONTHLY_RECURRING with a dayOfMonth: always resync future entries
+    // (deletes entries in wrong periods, upserts entries in correct periods).
+    // For other types: simple amount cascade when cascadeDefault is set.
+    if (source.type === 'MONTHLY_RECURRING' && source.dayOfMonth !== null && cascadeDefault) {
+      const firstId = await resyncMonthlyEntries(req.params.id, source.dayOfMonth, source.defaultAmount);
+      if (firstId) {
+        const affectedIds = await recomputeFromPeriod(firstId);
+        broadcast({ type: 'BALANCE_UPDATE', payPeriodIds: affectedIds });
+      }
+    } else if (cascadeDefault && typeof defaultAmount === 'number') {
+      const today = new Date();
+      const firstFuturePeriod = await prisma.payPeriod.findFirst({
+        where: { paydayDate: { gte: today } },
+        orderBy: { paydayDate: 'asc' },
+      });
+      if (firstFuturePeriod) {
+        await prisma.incomeEntry.updateMany({
+          where: {
+            incomeSourceId: req.params.id,
+            isReconciled: false,
+            payPeriod: { paydayDate: { gte: today } },
+          },
+          data: { projectedAmount: defaultAmount },
+        });
+        const affectedIds = await recomputeFromPeriod(firstFuturePeriod.id);
+        broadcast({ type: 'BALANCE_UPDATE', payPeriodIds: affectedIds });
+      }
+    }
+
+    const updated = await prisma.incomeSource.findUniqueOrThrow({ where: { id: req.params.id } });
+    res.json(updated);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }

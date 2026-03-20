@@ -69,6 +69,54 @@ export function useArchiveBillTemplate() {
   });
 }
 
+// ── Bill Groups ───────────────────────────────────────────────────────────────
+
+export function useBillGroups() {
+  return useQuery<string[]>({
+    queryKey: ['billGroups'],
+    queryFn: async () => {
+      const { data } = await axios.get(`${API}/api/bills/groups`);
+      return data;
+    },
+  });
+}
+
+export function useCreateBillGroup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ name, positionAfterId }: { name: string; positionAfterId: string | null }) => {
+      const { data } = await axios.post(`${API}/api/bills/groups`, { name, positionAfterId });
+      return data as string[];
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['billGroups'] }),
+  });
+}
+
+export function useRenameBillGroup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ oldName, newName, positionAfterId }: { oldName: string; newName: string; positionAfterId: string | null }) => {
+      const { data } = await axios.patch(`${API}/api/bills/groups/rename`, { oldName, newName, positionAfterId });
+      return data as string[];
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['billGroups'] });
+      qc.invalidateQueries({ queryKey: ['billTemplates'] });
+    },
+  });
+}
+
+export function useDeleteBillGroup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (name: string) => {
+      const { data } = await axios.delete(`${API}/api/bills/groups/${encodeURIComponent(name)}`);
+      return data as string[];
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['billGroups'] }),
+  });
+}
+
 // ── Income Sources ────────────────────────────────────────────────────────────
 
 export interface IncomeSourceForm {
@@ -79,6 +127,10 @@ export interface IncomeSourceForm {
   isActive: boolean;
   notes?: string;
   startDate?: string;
+  dayOfMonth?: number | null;
+  sortOrder?: number;
+  positionAfterId?: string | null;
+  cascadeDefault?: boolean;
 }
 
 export function useIncomeSources() {
