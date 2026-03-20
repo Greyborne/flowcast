@@ -5,6 +5,7 @@ import Layout from './components/Layout/Layout';
 import ProjectionGrid from './components/ProjectionGrid/ProjectionGrid';
 import BalanceHeader from './components/BalanceHeader/BalanceHeader';
 import SettingsPage from './pages/SettingsPage';
+import TransactionsPage from './pages/TransactionsPage';
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3001/ws';
 
@@ -64,6 +65,7 @@ function AppContent() {
             <ProjectionGrid />
           </>
         } />
+        <Route path="/transactions" element={<TransactionsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Routes>
     </Layout>

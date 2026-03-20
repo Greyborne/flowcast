@@ -66,6 +66,7 @@ model IncomeEntry {
 
   payPeriod    PayPeriod    @relation(fields: [payPeriodId], references: [id], onDelete: Cascade)
   incomeSource IncomeSource @relation(fields: [incomeSourceId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
 
   @@unique([payPeriodId, incomeSourceId])
   @@index([payPeriodId])
@@ -126,6 +127,7 @@ model BillInstance {
 
   payPeriod    PayPeriod    @relation(fields: [payPeriodId], references: [id], onDelete: Cascade)
   billTemplate BillTemplate @relation(fields: [billTemplateId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
 
   @@unique([payPeriodId, billTemplateId])
   @@index([payPeriodId])
@@ -167,4 +169,69 @@ model AppSetting {
   key       String   @id
   value     String
   updatedAt DateTime @updatedAt
+}
+
+// ── Import Batches ────────────────────────────────────────────────────────────
+// format: "OFX" | "CSV"
+// status: "COMPLETED" | "PARTIAL" | "FAILED"
+model ImportBatch {
+  id            String   @id @default(cuid())
+  filename      String
+  format        String   // "OFX" | "CSV"
+  importedAt    DateTime @default(now())
+  totalCount    Int      @default(0)
+  importedCount Int      @default(0)
+  skippedCount  Int      @default(0) // duplicates skipped
+  matchedCount  Int      @default(0) // auto-matched on import
+  status        String   @default("COMPLETED") // "COMPLETED" | "PARTIAL" | "FAILED"
+
+  transactions Transaction[]
+}
+
+// ── Transactions ──────────────────────────────────────────────────────────────
+// source: "OFX" | "CSV" | "MANUAL"
+// status: "UNMATCHED" | "MATCHED" | "IGNORED"
+model Transaction {
+  id              String    @id @default(cuid())
+  importBatchId   String?
+  dedupeKey       String?   @unique // fitId for OFX; SHA256 hash for CSV; null for manual
+  date            DateTime
+  amount          Float // negative = debit/expense, positive = credit/income
+  description     String
+  memo            String?
+  transactionType String? // OFX TRNTYPE: DEBIT | CREDIT | INT | DIV | FEE | SRVCHG | DEP | ATM | POS | XFER | CHECK | PAYMENT | CASH | DIRECTDEP | DIRECTDEBIT | REPEATPMT | OTHER
+  source          String    @default("OFX") // "OFX" | "CSV" | "MANUAL"
+  status          String    @default("UNMATCHED") // "UNMATCHED" | "MATCHED" | "IGNORED"
+  billInstanceId  String?
+  incomeEntryId   String?
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  importBatch  ImportBatch?  @relation(fields: [importBatchId], references: [id])
+  billInstance BillInstance? @relation(fields: [billInstanceId], references: [id])
+  incomeEntry  IncomeEntry?  @relation(fields: [incomeEntryId], references: [id])
+
+  @@index([date])
+  @@index([status])
+  @@index([importBatchId])
+  @@index([billInstanceId])
+  @@index([incomeEntryId])
+}
+
+// ── Auto Match Rules ──────────────────────────────────────────────────────────
+// matchType: "CONTAINS" | "STARTS_WITH" | "REGEX"
+// targetType: "BILL" | "INCOME"
+model AutoMatchRule {
+  id         String   @id @default(cuid())
+  pattern    String
+  matchType  String   @default("CONTAINS") // "CONTAINS" | "STARTS_WITH" | "REGEX"
+  targetType String   // "BILL" | "INCOME"
+  targetId   String   // billTemplateId or incomeSourceId
+  priority   Int      @default(0) // higher = evaluated first
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([isActive, priority])
 }

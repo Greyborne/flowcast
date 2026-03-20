@@ -136,3 +136,75 @@ export interface BillGridData {
   instanceMap: Record<string, Record<string, BillGridInstance>>;
   groups: string[];
 }
+
+// ── Transactions ──────────────────────────────────────────────────────────────
+
+export type TransactionStatus = 'UNMATCHED' | 'MATCHED' | 'IGNORED';
+export type TransactionSource = 'OFX' | 'CSV' | 'MANUAL';
+
+export interface Transaction {
+  id: string;
+  importBatchId: string | null;
+  dedupeKey: string | null;
+  date: string;
+  amount: number;
+  description: string;
+  memo: string | null;
+  transactionType: string | null;
+  source: TransactionSource;
+  status: TransactionStatus;
+  billInstanceId: string | null;
+  incomeEntryId: string | null;
+  notes: string | null;
+  createdAt: string;
+  billInstance?: {
+    id: string;
+    projectedAmount: number;
+    actualAmount: number | null;
+    billTemplate: { name: string; group: string };
+  } | null;
+  incomeEntry?: {
+    id: string;
+    projectedAmount: number;
+    actualAmount: number | null;
+    incomeSource: { name: string };
+  } | null;
+  importBatch?: { filename: string; format: string } | null;
+}
+
+export interface ImportBatch {
+  id: string;
+  filename: string;
+  format: string;
+  importedAt: string;
+  totalCount: number;
+  importedCount: number;
+  skippedCount: number;
+  matchedCount: number;
+  status: string;
+  _count?: { transactions: number };
+}
+
+export interface AutoMatchRule {
+  id: string;
+  pattern: string;
+  matchType: 'CONTAINS' | 'STARTS_WITH' | 'REGEX';
+  targetType: 'BILL' | 'INCOME';
+  targetId: string;
+  priority: number;
+  isActive: boolean;
+}
+
+export interface ImportResult {
+  batchId: string;
+  totalCount: number;
+  importedCount: number;
+  skippedCount: number;
+  matchedCount: number;
+  format: string;
+}
+
+export interface MatchCandidate {
+  bills: { id: string; payPeriodId: string; templateName: string; projectedAmount: number; paydayDate: string }[];
+  income: { id: string; payPeriodId: string; sourceName: string; projectedAmount: number; paydayDate: string }[];
+}

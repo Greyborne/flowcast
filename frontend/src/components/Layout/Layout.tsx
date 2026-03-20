@@ -34,6 +34,18 @@ export default function Layout({ children }: LayoutProps) {
               Dashboard
             </NavLink>
             <NavLink
+              to="/transactions"
+              className={({ isActive }) =>
+                `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-400 hover:text-white hover:bg-gray-800'
+                }`
+              }
+            >
+              Transactions
+            </NavLink>
+            <NavLink
               to="/settings"
               className={({ isActive }) =>
                 `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
