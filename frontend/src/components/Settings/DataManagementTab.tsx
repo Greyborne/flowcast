@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useQueryClient } from '@tanstack/react-query';
+import { useSettings } from '../../hooks/useSettings';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -57,27 +58,190 @@ const SEVERITY_STYLES: Record<string, string> = {
   high:     'border-orange-800/60 bg-orange-950/20',
   critical: 'border-red-800/60 bg-red-950/20',
 };
-
 const SEVERITY_CHECK: Record<string, string> = {
-  low:      'accent-yellow-500',
-  high:     'accent-orange-500',
-  critical: 'accent-red-500',
+  low: 'accent-yellow-500', high: 'accent-orange-500', critical: 'accent-red-500',
 };
-
 const SEVERITY_BADGE: Record<string, string> = {
   low:      'text-yellow-500 bg-yellow-950/50 border-yellow-700/50',
   high:     'text-orange-400 bg-orange-950/50 border-orange-700/50',
   critical: 'text-red-400 bg-red-950/50 border-red-700/50',
 };
 
+const FREQUENCY_OPTIONS = [
+  { value: 'weekly',   label: 'Weekly' },
+  { value: 'biweekly', label: 'Bi-Weekly (every 2 weeks)' },
+  { value: 'monthly',  label: 'Monthly' },
+];
+const PROJECTION_YEAR_OPTIONS = [
+  { value: '1', label: '1 Year' },
+  { value: '2', label: '2 Years' },
+  { value: '3', label: '3 Years' },
+];
+
+// ── Regenerate modal ──────────────────────────────────────────────────────────
+
+function RegenerateModal({ onClose, onDone }: { onClose: () => void; onDone: (msg: string) => void }) {
+  const { data: settings } = useSettings();
+  const qc = useQueryClient();
+
+  const [form, setForm] = useState({
+    currentBankBalance: '',
+    payScheduleAnchor:  '',
+    payFrequency:       'biweekly',
+    projectionYears:    '2',
+  });
+  const [saving,  setSaving]  = useState(false);
+  const [error,   setError]   = useState<string | null>(null);
+
+  // Pre-fill from current settings once loaded
+  useEffect(() => {
+    if (settings) {
+      setForm({
+        currentBankBalance: settings.currentBankBalance ?? '',
+        payScheduleAnchor:  settings.payScheduleAnchor  ?? '',
+        payFrequency:       settings.payFrequency        ?? 'biweekly',
+        projectionYears:    settings.projectionYears     ?? '2',
+      });
+    }
+  }, [settings]);
+
+  const handleRegenerate = async () => {
+    if (!form.payScheduleAnchor) { setError('Anchor payday date is required.'); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      // Save settings first, then regenerate
+      await axios.put(`${API}/api/settings`, form);
+      const { data } = await axios.post(`${API}/api/settings/regenerate-periods`);
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['payPeriods'] }),
+        qc.invalidateQueries({ queryKey: ['billGrid'] }),
+        qc.invalidateQueries({ queryKey: ['incomeGrid'] }),
+        qc.invalidateQueries({ queryKey: ['settings'] }),
+      ]);
+      onDone(data.message ?? 'Pay periods regenerated.');
+      onClose();
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Regeneration failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={() => !saving && onClose()}>
+      <div
+        className="w-[460px] bg-gray-950 border border-blue-900/60 rounded-xl shadow-2xl p-6 space-y-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div>
+          <h3 className="text-lg font-bold text-white">Regenerate Pay Schedule</h3>
+          <p className="text-xs text-gray-500 mt-1">
+            Review and adjust your schedule settings. Your bill templates and income sources
+            will be used to populate the new periods.
+          </p>
+        </div>
+
+        {/* Fields */}
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <label className="text-sm text-gray-400">
+              Anchor Payday Date <span className="text-red-400">*</span>
+            </label>
+            <p className="text-xs text-gray-600">Your first (or most recent) payday — the schedule builds forward from here.</p>
+            <input
+              type="date"
+              value={form.payScheduleAnchor}
+              onChange={(e) => setForm({ ...form, payScheduleAnchor: e.target.value })}
+              disabled={saving}
+              className="w-full bg-gray-800 border border-gray-700 focus:border-blue-500 rounded-lg px-3 py-2 text-white text-sm focus:outline-none"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-sm text-gray-400">Pay Frequency</label>
+              <select
+                value={form.payFrequency}
+                onChange={(e) => setForm({ ...form, payFrequency: e.target.value })}
+                disabled={saving}
+                className="w-full bg-gray-800 border border-gray-700 focus:border-blue-500 rounded-lg px-3 py-2 text-white text-sm focus:outline-none"
+              >
+                {FREQUENCY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm text-gray-400">Projection Window</label>
+              <select
+                value={form.projectionYears}
+                onChange={(e) => setForm({ ...form, projectionYears: e.target.value })}
+                disabled={saving}
+                className="w-full bg-gray-800 border border-gray-700 focus:border-blue-500 rounded-lg px-3 py-2 text-white text-sm focus:outline-none"
+              >
+                {PROJECTION_YEAR_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-sm text-gray-400">Opening Bank Balance</label>
+            <p className="text-xs text-gray-600">Current balance in your account — used as the starting point for projections.</p>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">$</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={form.currentBankBalance}
+                onChange={(e) => setForm({ ...form, currentBankBalance: e.target.value })}
+                disabled={saving}
+                placeholder="0.00"
+                className="w-full bg-gray-800 border border-gray-700 focus:border-blue-500 rounded-lg pl-7 pr-3 py-2 text-white text-sm focus:outline-none"
+              />
+            </div>
+          </div>
+        </div>
+
+        {error && (
+          <p className="text-xs text-red-400 bg-red-950/40 border border-red-800/50 rounded px-3 py-2">{error}</p>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={handleRegenerate}
+            disabled={saving || !form.payScheduleAnchor}
+            className="flex-1 py-2 bg-blue-700 hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors"
+          >
+            {saving ? 'Saving & regenerating…' : 'Save & Regenerate'}
+          </button>
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="px-4 py-2 text-gray-400 hover:text-white text-sm transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main tab ──────────────────────────────────────────────────────────────────
+
 export default function DataManagementTab() {
   const qc = useQueryClient();
-  const [selected,    setSelected]    = useState<Set<ClearTarget>>(new Set());
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [confirmText, setConfirmText] = useState('');
-  const [saving,      setSaving]      = useState(false);
-  const [result,      setResult]      = useState<string | null>(null);
-  const [error,       setError]       = useState<string | null>(null);
+  const [selected,        setSelected]        = useState<Set<ClearTarget>>(new Set());
+  const [showConfirm,     setShowConfirm]     = useState(false);
+  const [showRegenerate,  setShowRegenerate]  = useState(false);
+  const [confirmText,     setConfirmText]     = useState('');
+  const [saving,          setSaving]          = useState(false);
+  const [result,          setResult]          = useState<string | null>(null);
+  const [regenResult,     setRegenResult]     = useState<string | null>(null);
+  const [error,           setError]           = useState<string | null>(null);
+  const [clearedPeriods,  setClearedPeriods]  = useState(false);
 
   const toggle = (id: ClearTarget) =>
     setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -85,28 +249,29 @@ export default function DataManagementTab() {
   const selectAll = () => setSelected(new Set(OPTIONS.map((o) => o.id)));
   const clearAll  = () => setSelected(new Set());
 
-  const hasCritical = [...selected].some((id) => OPTIONS.find((o) => o.id === id)?.severity === 'critical');
+  const hasCritical   = [...selected].some((id) => OPTIONS.find((o) => o.id === id)?.severity === 'critical');
   const confirmPhrase = 'DELETE MY DATA';
-
-  const canConfirm = selected.size > 0 && (hasCritical ? confirmText === confirmPhrase : true);
+  const canConfirm    = selected.size > 0 && (hasCritical ? confirmText === confirmPhrase : true);
 
   const handleClear = async () => {
     setSaving(true);
     setResult(null);
     setError(null);
+    const includedPeriods = selected.has('periods');
     try {
       const { data } = await axios.post(`${API}/api/admin/clear`, { targets: [...selected] });
       const parts: string[] = [];
-      if (data.summary.billsUnreconciled)     parts.push(`${data.summary.billsUnreconciled} bills un-reconciled`);
-      if (data.summary.incomeUnreconciled)    parts.push(`${data.summary.incomeUnreconciled} income entries un-reconciled`);
-      if (data.summary.logsDeleted)           parts.push(`${data.summary.logsDeleted} reconciliation logs cleared`);
-      if (data.summary.instancesDeleted)      parts.push(`${data.summary.instancesDeleted} bill instances deleted`);
-      if (data.summary.entriesDeleted)        parts.push(`${data.summary.entriesDeleted} income entries deleted`);
-      if (data.summary.snapshotsDeleted)      parts.push(`${data.summary.snapshotsDeleted} snapshots cleared`);
-      if (data.summary.templatesDeleted)      parts.push(`${data.summary.templatesDeleted} bill templates deleted`);
-      if (data.summary.sourcesDeleted)        parts.push(`${data.summary.sourcesDeleted} income sources deleted`);
-      if (data.summary.periodsDeleted)        parts.push(`${data.summary.periodsDeleted} pay periods deleted`);
+      if (data.summary.billsUnreconciled)  parts.push(`${data.summary.billsUnreconciled} bills un-reconciled`);
+      if (data.summary.incomeUnreconciled) parts.push(`${data.summary.incomeUnreconciled} income entries un-reconciled`);
+      if (data.summary.logsDeleted)        parts.push(`${data.summary.logsDeleted} reconciliation logs cleared`);
+      if (data.summary.instancesDeleted)   parts.push(`${data.summary.instancesDeleted} bill instances deleted`);
+      if (data.summary.entriesDeleted)     parts.push(`${data.summary.entriesDeleted} income entries deleted`);
+      if (data.summary.snapshotsDeleted)   parts.push(`${data.summary.snapshotsDeleted} snapshots cleared`);
+      if (data.summary.templatesDeleted)   parts.push(`${data.summary.templatesDeleted} bill templates deleted`);
+      if (data.summary.sourcesDeleted)     parts.push(`${data.summary.sourcesDeleted} income sources deleted`);
+      if (data.summary.periodsDeleted)     parts.push(`${data.summary.periodsDeleted} pay periods deleted`);
       setResult(parts.length ? parts.join(', ') + '.' : 'Done — nothing to clear.');
+      setClearedPeriods(includedPeriods);
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['payPeriods'] }),
         qc.invalidateQueries({ queryKey: ['billGrid'] }),
@@ -125,13 +290,11 @@ export default function DataManagementTab() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="text-sm text-gray-400">
-          Selectively clear portions of your data. Each operation is described below — read carefully before proceeding.
-        </p>
-      </div>
+      <p className="text-sm text-gray-400">
+        Selectively clear portions of your data. Each operation is described below — read carefully before proceeding.
+      </p>
 
-      {/* Options */}
+      {/* ── Clear options ── */}
       <div className="space-y-2">
         <div className="flex items-center gap-3 mb-3">
           <button onClick={selectAll} className="text-xs text-gray-500 hover:text-white transition-colors">Select all</button>
@@ -146,9 +309,7 @@ export default function DataManagementTab() {
           <label
             key={opt.id}
             className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-              selected.has(opt.id)
-                ? SEVERITY_STYLES[opt.severity]
-                : 'border-gray-800 bg-gray-900/40 hover:bg-gray-800/30'
+              selected.has(opt.id) ? SEVERITY_STYLES[opt.severity] : 'border-gray-800 bg-gray-900/40 hover:bg-gray-800/30'
             }`}
           >
             <input
@@ -170,10 +331,26 @@ export default function DataManagementTab() {
         ))}
       </div>
 
-      {/* Action button */}
+      {/* ── Results ── */}
       {result && (
-        <div className="p-3 rounded-lg bg-green-950/40 border border-green-800/50 text-xs text-green-300">
-          ✓ {result}
+        <div className="p-3 rounded-lg bg-green-950/40 border border-green-800/50 space-y-2">
+          <p className="text-xs text-green-300">✓ {result}</p>
+          {clearedPeriods && (
+            <div className="flex items-center gap-3 pt-1 border-t border-green-900/40">
+              <p className="text-xs text-blue-300 flex-1">Pay periods were deleted. Ready to rebuild your schedule?</p>
+              <button
+                onClick={() => { setShowRegenerate(true); setRegenResult(null); }}
+                className="shrink-0 px-3 py-1.5 bg-blue-700 hover:bg-blue-600 text-white text-xs font-medium rounded-lg transition-colors"
+              >
+                Regenerate Now →
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {regenResult && (
+        <div className="p-3 rounded-lg bg-blue-950/40 border border-blue-800/50 text-xs text-blue-300">
+          ✓ {regenResult}
         </div>
       )}
       {error && (
@@ -182,17 +359,25 @@ export default function DataManagementTab() {
         </div>
       )}
 
-      <div>
+      {/* ── Action buttons ── */}
+      <div className="flex items-center gap-3">
         <button
-          onClick={() => { setShowConfirm(true); setConfirmText(''); setResult(null); setError(null); }}
+          onClick={() => { setShowConfirm(true); setConfirmText(''); setResult(null); setError(null); setClearedPeriods(false); setRegenResult(null); }}
           disabled={selected.size === 0}
           className="px-4 py-2 bg-red-800 hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm rounded-lg transition-colors font-medium"
         >
           Clear Selected Data
         </button>
+        <span className="text-gray-700">·</span>
+        <button
+          onClick={() => { setShowRegenerate(true); setRegenResult(null); }}
+          className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-blue-400 hover:text-blue-300 text-sm rounded-lg transition-colors border border-gray-700"
+        >
+          Regenerate Projections
+        </button>
       </div>
 
-      {/* Confirmation modal */}
+      {/* ── Delete confirmation modal ── */}
       {showConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={() => !saving && setShowConfirm(false)}>
           <div
@@ -250,6 +435,14 @@ export default function DataManagementTab() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Regenerate modal ── */}
+      {showRegenerate && (
+        <RegenerateModal
+          onClose={() => setShowRegenerate(false)}
+          onDone={(msg) => setRegenResult(msg)}
+        />
       )}
     </div>
   );
