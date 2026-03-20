@@ -31,6 +31,7 @@ router.get('/grid', async (_req: Request, res: Response) => {
           projectedAmount: true,
           actualAmount: true,
           isReconciled: true,
+          notes: true,
         },
       }),
     ]);

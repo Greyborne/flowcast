@@ -251,8 +251,9 @@ function PeriodDetailPanel({
 }) {
   const qc = useQueryClient();
   const [batchState, setBatchState] = useState<'idle' | 'selecting' | 'saving'>('idle');
-  const [checkedBills,  setCheckedBills]  = useState<Set<string>>(new Set());
-  const [checkedIncome, setCheckedIncome] = useState<Set<string>>(new Set());
+  const [checkedBills,    setCheckedBills]    = useState<Set<string>>(new Set());
+  const [checkedIncome,   setCheckedIncome]   = useState<Set<string>>(new Set());
+  const [activePanelCell, setActivePanelCell] = useState<ActiveCell>(null);
 
   const projected = period.balanceSnapshot?.runningBalance;
   const planned   = period.balanceSnapshot?.plannedBalance;
@@ -416,26 +417,68 @@ function PeriodDetailPanel({
         <div className="px-5 py-4 border-b border-gray-800">
           <p className="text-[10px] text-green-400 uppercase tracking-widest font-bold mb-3">Income</p>
           {incomeItems.map(({ source, entry }) => (
-            <div key={source.id} className="flex items-center gap-2 py-1.5">
-              {batchState === 'selecting' && !entry.isReconciled && (
-                <input
-                  type="checkbox"
-                  checked={checkedIncome.has(entry.id)}
-                  onChange={() => toggleIncome(entry.id)}
-                  className="shrink-0 accent-green-500 cursor-pointer"
-                />
+            <div key={source.id}>
+              {activePanelCell?.id === entry.id ? (
+                <div className="py-1.5">
+                  {activePanelCell.mode === 'reconcile' ? (
+                    <ReconcileInput
+                      defaultValue={entry.actualAmount ?? entry.projectedAmount}
+                      onDraftSave={async (amount, cascade) => {
+                        await axios.patch(`${API}/api/income/entry/${entry.id}`, { projectedAmount: amount, cascade });
+                        await qc.invalidateQueries({ queryKey: ['incomeGrid'] });
+                        await qc.invalidateQueries({ queryKey: ['payPeriods'] });
+                        setActivePanelCell(null);
+                      }}
+                      onReconcile={async (amount, cascade) => {
+                        await axios.post(`${API}/api/reconciliation/income/${entry.id}`, { actualAmount: amount, cascade });
+                        await qc.invalidateQueries({ queryKey: ['incomeGrid'] });
+                        await qc.invalidateQueries({ queryKey: ['payPeriods'] });
+                        setActivePanelCell(null);
+                      }}
+                      onCancel={() => setActivePanelCell(null)}
+                    />
+                  ) : (
+                    <UnreconcileConfirm
+                      onConfirm={async () => {
+                        await axios.delete(`${API}/api/reconciliation/income/${entry.id}`);
+                        await qc.invalidateQueries({ queryKey: ['incomeGrid'] });
+                        await qc.invalidateQueries({ queryKey: ['payPeriods'] });
+                        setActivePanelCell(null);
+                      }}
+                      onCancel={() => setActivePanelCell(null)}
+                    />
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 py-1.5 group/panelrow">
+                  {batchState === 'selecting' && !entry.isReconciled && (
+                    <input
+                      type="checkbox"
+                      checked={checkedIncome.has(entry.id)}
+                      onChange={() => toggleIncome(entry.id)}
+                      className="shrink-0 accent-green-500 cursor-pointer"
+                    />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <span className="text-xs text-gray-300">{source.name}</span>
+                    {entry.notes && <p className="text-[10px] text-gray-600 italic truncate">{entry.notes}</p>}
+                  </div>
+                  <button
+                    onClick={() => batchState === 'idle' && setActivePanelCell({ type: 'income', id: entry.id, mode: entry.isReconciled ? 'unreconcile' : 'reconcile' })}
+                    className={`text-right shrink-0 rounded px-1 transition-colors ${batchState === 'idle' ? 'hover:bg-gray-800 cursor-pointer' : 'cursor-default'}`}
+                    title={batchState === 'idle' ? (entry.isReconciled ? 'Click to un-reconcile' : 'Click to reconcile') : undefined}
+                  >
+                    {entry.isReconciled ? (
+                      <>
+                        <span className="text-xs text-gray-600 line-through mr-2">{fmt(entry.projectedAmount)}</span>
+                        <span className="text-xs text-green-300 font-medium">{fmt(entry.actualAmount)}</span>
+                      </>
+                    ) : (
+                      <span className="text-xs text-green-300/60">{fmt(entry.projectedAmount)}</span>
+                    )}
+                  </button>
+                </div>
               )}
-              <span className="text-xs text-gray-300 flex-1">{source.name}</span>
-              <div className="text-right">
-                {entry.isReconciled ? (
-                  <>
-                    <span className="text-xs text-gray-600 line-through mr-2">{fmt(entry.projectedAmount)}</span>
-                    <span className="text-xs text-green-300 font-medium">{fmt(entry.actualAmount)}</span>
-                  </>
-                ) : (
-                  <span className="text-xs text-green-300/60">{fmt(entry.projectedAmount)}</span>
-                )}
-              </div>
             </div>
           ))}
         </div>
@@ -449,26 +492,68 @@ function PeriodDetailPanel({
             const inst = billGrid.instanceMap[t.id][period.id];
             const color = t.billType === 'SAVINGS' ? 'text-emerald-300' : t.billType === 'TRANSFER' ? 'text-sky-300' : 'text-orange-300';
             return (
-              <div key={t.id} className="flex items-center gap-2 py-1.5">
-                {batchState === 'selecting' && !inst.isReconciled && (
-                  <input
-                    type="checkbox"
-                    checked={checkedBills.has(inst.id)}
-                    onChange={() => toggleBill(inst.id)}
-                    className="shrink-0 accent-green-500 cursor-pointer"
-                  />
+              <div key={t.id}>
+                {activePanelCell?.id === inst.id ? (
+                  <div className="py-1.5">
+                    {activePanelCell.mode === 'reconcile' ? (
+                      <ReconcileInput
+                        defaultValue={inst.actualAmount ?? inst.projectedAmount}
+                        onDraftSave={async (val, cascade) => {
+                          await axios.patch(`${API}/api/bills/instance/${inst.id}`, { projectedAmount: val, cascade });
+                          await qc.invalidateQueries({ queryKey: ['billGrid'] });
+                          await qc.invalidateQueries({ queryKey: ['payPeriods'] });
+                          setActivePanelCell(null);
+                        }}
+                        onReconcile={async (val, cascade) => {
+                          await axios.post(`${API}/api/reconciliation/bill/${inst.id}`, { actualAmount: val, cascade });
+                          await qc.invalidateQueries({ queryKey: ['billGrid'] });
+                          await qc.invalidateQueries({ queryKey: ['payPeriods'] });
+                          setActivePanelCell(null);
+                        }}
+                        onCancel={() => setActivePanelCell(null)}
+                      />
+                    ) : (
+                      <UnreconcileConfirm
+                        onConfirm={async () => {
+                          await axios.delete(`${API}/api/reconciliation/bill/${inst.id}`);
+                          await qc.invalidateQueries({ queryKey: ['billGrid'] });
+                          await qc.invalidateQueries({ queryKey: ['payPeriods'] });
+                          setActivePanelCell(null);
+                        }}
+                        onCancel={() => setActivePanelCell(null)}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 py-1.5">
+                    {batchState === 'selecting' && !inst.isReconciled && (
+                      <input
+                        type="checkbox"
+                        checked={checkedBills.has(inst.id)}
+                        onChange={() => toggleBill(inst.id)}
+                        className="shrink-0 accent-green-500 cursor-pointer"
+                      />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <span className="text-xs text-gray-300">{t.name}</span>
+                      {inst.notes && <p className="text-[10px] text-gray-600 italic truncate">{inst.notes}</p>}
+                    </div>
+                    <button
+                      onClick={() => batchState === 'idle' && setActivePanelCell({ type: 'bill', id: inst.id, mode: inst.isFrozen ? 'unreconcile' : 'reconcile' })}
+                      className={`text-right shrink-0 rounded px-1 transition-colors ${batchState === 'idle' ? 'hover:bg-gray-800 cursor-pointer' : 'cursor-default'}`}
+                      title={batchState === 'idle' ? (inst.isFrozen ? 'Click to un-reconcile' : 'Click to reconcile') : undefined}
+                    >
+                      {inst.isReconciled ? (
+                        <>
+                          <span className="text-xs text-gray-600 line-through mr-2">{fmt(inst.projectedAmount)}</span>
+                          <span className={`text-xs ${color} font-medium`}>{fmt(inst.actualAmount)}</span>
+                        </>
+                      ) : (
+                        <span className={`text-xs ${color}/60`}>{fmt(inst.projectedAmount)}</span>
+                      )}
+                    </button>
+                  </div>
                 )}
-                <span className="text-xs text-gray-300 flex-1">{t.name}</span>
-                <div className="text-right">
-                  {inst.isReconciled ? (
-                    <>
-                      <span className="text-xs text-gray-600 line-through mr-2">{fmt(inst.projectedAmount)}</span>
-                      <span className={`text-xs ${color} font-medium`}>{fmt(inst.actualAmount)}</span>
-                    </>
-                  ) : (
-                    <span className={`text-xs ${color}/60`}>{fmt(inst.projectedAmount)}</span>
-                  )}
-                </div>
               </div>
             );
           })}

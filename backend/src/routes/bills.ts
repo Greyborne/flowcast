@@ -81,6 +81,7 @@ router.get('/grid', async (_req: Request, res: Response) => {
           actualAmount: true,
           isReconciled: true,
           isFrozen: true,
+          notes: true,
         },
       }),
       getOrderedGroups(),
@@ -329,6 +330,25 @@ router.patch('/:id/restore', async (req: Request, res: Response) => {
       data: { isActive: true },
     });
     res.json(bill);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// DELETE /api/bills/:id/monthly/:year/:month — remove a monthly override
+router.delete('/:id/monthly/:year/:month', async (req: Request, res: Response) => {
+  try {
+    const { id, year, month } = req.params;
+    await prisma.billMonthlyAmount.delete({
+      where: {
+        billTemplateId_year_month: {
+          billTemplateId: id,
+          year: Number(year),
+          month: Number(month),
+        },
+      },
+    });
+    res.json({ success: true });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }

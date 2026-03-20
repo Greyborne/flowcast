@@ -8,8 +8,15 @@ import {
   useCreateBillGroup,
   useRenameBillGroup,
   useDeleteBillGroup,
+  useSetMonthlyAmount,
+  useDeleteMonthlyAmount,
   type BillTemplateForm,
+  type MonthlyAmountOverride,
 } from '../../hooks/useTemplates';
+
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const THIS_YEAR = new Date().getFullYear();
+const YEAR_OPTIONS = [THIS_YEAR, THIS_YEAR + 1, THIS_YEAR + 2];
 
 const EMPTY_FORM: BillTemplateForm = {
   name: '',
@@ -86,10 +93,10 @@ function GroupForm({ initial, allGroups, currentPosition, onSave, onCancel, savi
 interface GroupBill { id: string; name: string; }
 
 interface EditFormProps {
-  initial: BillTemplateForm & { id?: string };
+  initial: BillTemplateForm & { id?: string; monthlyAmounts?: MonthlyAmountOverride[] };
   allGroups: string[];
   groupBills: GroupBill[];
-  currentPosition?: string | null;    // predecessor bill id (null=first, undefined=use default)
+  currentPosition?: string | null;
   onGroupChange: (group: string) => void;
   onSave: (form: BillTemplateForm, positionAfterId: string | null) => Promise<void>;
   onCancel: () => void;
@@ -98,11 +105,14 @@ interface EditFormProps {
 
 function EditForm({ initial, allGroups, groupBills, currentPosition, onGroupChange, onSave, onCancel, saving }: EditFormProps) {
   const [form, setForm] = useState<BillTemplateForm>(initial);
-  // If editing: start at current position. If new: default to last.
   const defaultPosition = currentPosition !== undefined
     ? currentPosition
     : (groupBills.length > 0 ? groupBills[groupBills.length - 1].id : null);
   const [positionAfterId, setPositionAfterId] = useState<string | null>(defaultPosition);
+  const [showOverrides, setShowOverrides] = useState(false);
+  const [newOverride, setNewOverride] = useState({ year: THIS_YEAR, month: 1, amount: '' });
+  const setMonthly = useSetMonthlyAmount();
+  const deleteMonthly = useDeleteMonthlyAmount();
   const set = (patch: Partial<BillTemplateForm>) => setForm((f) => ({ ...f, ...patch }));
 
   const handleGroupChange = (group: string) => {
@@ -188,6 +198,99 @@ function EditForm({ initial, allGroups, groupBills, currentPosition, onGroupChan
           Discretionary
         </label>
       </div>
+
+      {/* Monthly amount overrides — only shown when editing an existing template */}
+      {initial.id && (
+        <div className="col-span-2 border-t border-gray-700/60 pt-3">
+          <button
+            onClick={() => setShowOverrides((v) => !v)}
+            className="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+          >
+            <span>{showOverrides ? '▼' : '▶'}</span>
+            <span>Monthly Amount Overrides</span>
+            {(initial.monthlyAmounts?.length ?? 0) > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 bg-blue-900/40 text-blue-400 rounded text-[10px]">
+                {initial.monthlyAmounts!.length}
+              </span>
+            )}
+          </button>
+
+          {showOverrides && (
+            <div className="mt-2 space-y-2">
+              {/* Existing overrides */}
+              {(initial.monthlyAmounts ?? []).length === 0 && (
+                <p className="text-xs text-gray-600 italic">No overrides set. The default amount applies to all months.</p>
+              )}
+              {(initial.monthlyAmounts ?? []).map((o) => (
+                <div key={o.id} className="flex items-center gap-2 text-xs">
+                  <span className="text-gray-400 w-24">{MONTH_NAMES[o.month - 1]} {o.year}</span>
+                  <span className="text-white font-mono">
+                    {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(o.amount)}
+                  </span>
+                  <button
+                    onClick={() => deleteMonthly.mutate({ templateId: initial.id!, year: o.year, month: o.month })}
+                    disabled={deleteMonthly.isPending}
+                    className="text-red-500 hover:text-red-400 ml-auto disabled:opacity-50"
+                    title="Remove override"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+
+              {/* Add new override */}
+              <div className="flex items-end gap-2 pt-1 border-t border-gray-700/40">
+                <div className="space-y-0.5">
+                  <label className="text-[10px] text-gray-500">Year</label>
+                  <select
+                    value={newOverride.year}
+                    onChange={(e) => setNewOverride((o) => ({ ...o, year: Number(e.target.value) }))}
+                    className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-white focus:outline-none"
+                  >
+                    {YEAR_OPTIONS.map((y) => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-0.5">
+                  <label className="text-[10px] text-gray-500">Month</label>
+                  <select
+                    value={newOverride.month}
+                    onChange={(e) => setNewOverride((o) => ({ ...o, month: Number(e.target.value) }))}
+                    className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-white focus:outline-none"
+                  >
+                    {MONTH_NAMES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-0.5">
+                  <label className="text-[10px] text-gray-500">Amount</label>
+                  <div className="relative">
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-[10px]">$</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="0.00"
+                      value={newOverride.amount}
+                      onChange={(e) => setNewOverride((o) => ({ ...o, amount: e.target.value }))}
+                      className="bg-gray-800 border border-gray-700 rounded pl-4 pr-2 py-1 text-xs text-white w-24 focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+                <button
+                  onClick={async () => {
+                    const amount = parseFloat(newOverride.amount);
+                    if (isNaN(amount) || !initial.id) return;
+                    await setMonthly.mutateAsync({ templateId: initial.id, year: newOverride.year, month: newOverride.month, amount });
+                    setNewOverride((o) => ({ ...o, amount: '' }));
+                  }}
+                  disabled={setMonthly.isPending || !newOverride.amount}
+                  className="px-3 py-1 bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white text-xs rounded transition-colors"
+                >
+                  {setMonthly.isPending ? '…' : 'Add'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="col-span-2 flex gap-2 pt-1">
         <button

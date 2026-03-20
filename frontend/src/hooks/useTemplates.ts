@@ -5,6 +5,13 @@ const API = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 // ── Bill Templates ────────────────────────────────────────────────────────────
 
+export interface MonthlyAmountOverride {
+  id: string;
+  year: number;
+  month: number;
+  amount: number;
+}
+
 export interface BillTemplateForm {
   name: string;
   group: string;
@@ -66,6 +73,27 @@ export function useArchiveBillTemplate() {
       qc.invalidateQueries({ queryKey: ['billTemplates'] });
       qc.invalidateQueries({ queryKey: ['billGrid'] });
     },
+  });
+}
+
+export function useSetMonthlyAmount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ templateId, year, month, amount }: { templateId: string; year: number; month: number; amount: number }) => {
+      const { data } = await axios.put(`${API}/api/bills/${templateId}/monthly/${year}/${month}`, { amount });
+      return data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['billTemplates'] }),
+  });
+}
+
+export function useDeleteMonthlyAmount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ templateId, year, month }: { templateId: string; year: number; month: number }) => {
+      await axios.delete(`${API}/api/bills/${templateId}/monthly/${year}/${month}`);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['billTemplates'] }),
   });
 }
 

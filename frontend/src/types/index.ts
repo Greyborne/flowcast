@@ -114,6 +114,7 @@ export interface IncomeGridEntry {
   projectedAmount: number;
   actualAmount: number | null;
   isReconciled: boolean;
+  notes: string | null;
 }
 
 export interface IncomeGridData {
@@ -127,6 +128,7 @@ export interface BillGridInstance {
   actualAmount: number | null;
   isReconciled: boolean;
   isFrozen: boolean;
+  notes: string | null;
 }
 
 export interface BillGridData {
