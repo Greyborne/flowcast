@@ -2,11 +2,13 @@ import { useState } from 'react';
 import ScheduleTab from '../components/Settings/ScheduleTab';
 import BillTemplatesTab from '../components/Settings/BillTemplatesTab';
 import IncomeSourcesTab from '../components/Settings/IncomeSourcesTab';
+import DataManagementTab from '../components/Settings/DataManagementTab';
 
 const TABS = [
   { id: 'schedule',  label: 'Schedule & Balance' },
   { id: 'bills',     label: 'Bill Templates' },
   { id: 'income',    label: 'Income Sources' },
+  { id: 'data',      label: 'Data Management' },
 ] as const;
 
 type TabId = typeof TABS[number]['id'];
@@ -29,8 +31,12 @@ export default function SettingsPage() {
             onClick={() => setActiveTab(tab.id)}
             className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors -mb-px ${
               activeTab === tab.id
-                ? 'bg-gray-900 text-white border border-gray-800 border-b-gray-900'
-                : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
+                ? tab.id === 'data'
+                  ? 'bg-gray-900 text-red-400 border border-gray-800 border-b-gray-900'
+                  : 'bg-gray-900 text-white border border-gray-800 border-b-gray-900'
+                : tab.id === 'data'
+                  ? 'text-red-600 hover:text-red-400 hover:bg-gray-800/50'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
             }`}
           >
             {tab.label}
@@ -42,6 +48,7 @@ export default function SettingsPage() {
       {activeTab === 'schedule' && <ScheduleTab />}
       {activeTab === 'bills'    && <BillTemplatesTab />}
       {activeTab === 'income'   && <IncomeSourcesTab />}
+      {activeTab === 'data'     && <DataManagementTab />}
     </div>
   );
 }

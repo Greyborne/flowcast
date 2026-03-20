@@ -14,6 +14,7 @@ import billsRouter from './routes/bills';
 import incomeRouter from './routes/income';
 import reconciliationRouter from './routes/reconciliation';
 import settingsRouter from './routes/settings';
+import adminRouter from './routes/admin';
 
 const app = express();
 const httpServer = createServer(app);
@@ -33,6 +34,7 @@ app.use('/api/bills', billsRouter);
 app.use('/api/income', incomeRouter);
 app.use('/api/reconciliation', reconciliationRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/admin', adminRouter);
 
 // ── Error Handler ────────────────────────────────────────────────────────────
 app.use(errorHandler);
