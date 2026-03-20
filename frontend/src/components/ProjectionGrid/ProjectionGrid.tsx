@@ -1,5 +1,6 @@
 import { useState, Fragment, useRef, useEffect } from 'react';
 import axios from 'axios';
+import { useQueryClient } from '@tanstack/react-query';
 import { usePayPeriods, useBillGrid, useIncomeGrid, useCreateAdhocBill } from '../../hooks/usePayPeriods';
 import type { PayPeriod, BillTemplate, BillGridInstance, IncomeSource, IncomeGridEntry } from '../../types';
 
@@ -99,22 +100,27 @@ export default function ProjectionGrid() {
               <th className={`sticky left-0 ${THEAD_H} z-30 bg-gray-900 text-left py-3 px-4 text-xs text-gray-500 uppercase tracking-wider w-48 border-r border-gray-800`}>
                 Pay Period
               </th>
-              {visiblePeriods.map((p) => (
-                <th
-                  key={p.id}
-                  onClick={() => togglePeriod(p.id)}
-                  className={`sticky ${THEAD_H} z-20 py-3 px-4 text-center text-xs whitespace-nowrap min-w-[110px] cursor-pointer transition-colors select-none ${
-                    selectedPeriodId === p.id
-                      ? 'bg-blue-900 text-blue-300'
-                      : 'bg-gray-900 text-gray-400 hover:bg-gray-800 hover:text-gray-200'
-                  }`}
-                >
-                  {fmtDate(p.paydayDate)}
-                  {selectedPeriodId === p.id && (
-                    <span className="ml-1 text-blue-400">›</span>
-                  )}
-                </th>
-              ))}
+              {visiblePeriods.map((p) => {
+                const isNegative = (p.balanceSnapshot?.runningBalance ?? 0) < 0;
+                const isSel = selectedPeriodId === p.id;
+                return (
+                  <th
+                    key={p.id}
+                    onClick={() => togglePeriod(p.id)}
+                    className={`sticky ${THEAD_H} z-20 py-3 px-4 text-center text-xs whitespace-nowrap min-w-[110px] cursor-pointer transition-colors select-none border-b-2 ${
+                      isSel
+                        ? 'bg-blue-900 text-blue-300 border-blue-500'
+                        : isNegative
+                          ? 'bg-red-950/40 text-red-400 border-red-700 hover:bg-red-950/60'
+                          : 'bg-gray-900 text-gray-400 border-transparent hover:bg-gray-800 hover:text-gray-200'
+                    }`}
+                  >
+                    {fmtDate(p.paydayDate)}
+                    {isNegative && !isSel && <span className="ml-1">⚠</span>}
+                    {isSel && <span className="ml-1 text-blue-400">›</span>}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
 
@@ -243,6 +249,11 @@ function PeriodDetailPanel({
   incomeGrid: IncomeGridData;
   onClose:    () => void;
 }) {
+  const qc = useQueryClient();
+  const [batchState, setBatchState] = useState<'idle' | 'selecting' | 'saving'>('idle');
+  const [checkedBills,  setCheckedBills]  = useState<Set<string>>(new Set());
+  const [checkedIncome, setCheckedIncome] = useState<Set<string>>(new Set());
+
   const projected = period.balanceSnapshot?.runningBalance;
   const planned   = period.balanceSnapshot?.plannedBalance;
   const diff      = (projected ?? 0) - (planned ?? 0);
@@ -251,6 +262,7 @@ function PeriodDetailPanel({
     .map((s) => ({ source: s, entry: incomeGrid.entryMap[s.id]?.[period.id] }))
     .filter((x): x is { source: IncomeSource; entry: IncomeGridEntry } => x.entry != null);
 
+  const orderMap = Object.fromEntries(billGrid.groups.map((g, i) => [g, i]));
   const billGroups = Object.entries(
     billGrid.templates
       .filter((t) => billGrid.instanceMap[t.id]?.[period.id])
@@ -258,7 +270,52 @@ function PeriodDetailPanel({
         (acc[t.group] ??= []).push(t);
         return acc;
       }, {})
-  ).sort(([a], [b]) => a.localeCompare(b));
+  ).sort(([a], [b]) => (orderMap[a] ?? 9999) - (orderMap[b] ?? 9999));
+
+  const unreconciledBillIds = billGroups.flatMap(([, ts]) => ts)
+    .filter((t) => !billGrid.instanceMap[t.id][period.id].isReconciled)
+    .map((t) => billGrid.instanceMap[t.id][period.id].id);
+  const unreconciledIncomeIds = incomeItems
+    .filter(({ entry }) => !entry.isReconciled)
+    .map(({ entry }) => entry.id);
+  const unreconciledCount = unreconciledBillIds.length + unreconciledIncomeIds.length;
+  const checkedCount = checkedBills.size + checkedIncome.size;
+
+  const enterSelecting = () => {
+    setCheckedBills(new Set(unreconciledBillIds));
+    setCheckedIncome(new Set(unreconciledIncomeIds));
+    setBatchState('selecting');
+  };
+
+  const cancelSelecting = () => {
+    setBatchState('idle');
+    setCheckedBills(new Set());
+    setCheckedIncome(new Set());
+  };
+
+  const handleBatchReconcile = async () => {
+    setBatchState('saving');
+    try {
+      await axios.post(`${API}/api/reconciliation/period/${period.id}/batch`, {
+        billInstanceIds:  [...checkedBills],
+        incomeEntryIds:   [...checkedIncome],
+      });
+      await qc.invalidateQueries({ queryKey: ['billGrid'] });
+      await qc.invalidateQueries({ queryKey: ['incomeGrid'] });
+      await qc.invalidateQueries({ queryKey: ['payPeriods'] });
+    } finally {
+      setBatchState('idle');
+      setCheckedBills(new Set());
+      setCheckedIncome(new Set());
+    }
+  };
+
+  const toggleBill = (id: string) => setCheckedBills((s) => {
+    const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n;
+  });
+  const toggleIncome = (id: string) => setCheckedIncome((s) => {
+    const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n;
+  });
 
   const totalIncome   = incomeItems.reduce((s, { entry }) => s + (entry.isReconciled ? (entry.actualAmount ?? entry.projectedAmount) : entry.projectedAmount), 0);
   const totalExpenses = billGroups.flatMap(([, ts]) => ts).reduce((s, t) => {
@@ -276,6 +333,36 @@ function PeriodDetailPanel({
         <div>
           <p className="text-[10px] text-gray-500 uppercase tracking-widest">Pay Period Detail</p>
           <h2 className="text-white font-bold text-lg leading-tight">{fmtDate(period.paydayDate)}</h2>
+          {unreconciledCount > 0 && batchState === 'idle' && (
+            <div className="mt-2">
+              <button
+                onClick={enterSelecting}
+                className="text-[11px] text-gray-500 hover:text-green-400 border border-gray-700 hover:border-green-700 px-2 py-0.5 rounded transition-colors"
+              >
+                Reconcile all ({unreconciledCount})
+              </button>
+            </div>
+          )}
+          {batchState === 'selecting' && (
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                onClick={handleBatchReconcile}
+                disabled={checkedCount === 0}
+                className="text-[11px] bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white px-2 py-0.5 rounded transition-colors"
+              >
+                Reconcile {checkedCount} selected
+              </button>
+              <button
+                onClick={cancelSelecting}
+                className="text-[11px] text-gray-500 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+          {batchState === 'saving' && (
+            <p className="mt-2 text-[11px] text-gray-500">Reconciling…</p>
+          )}
         </div>
         <button
           onClick={onClose}
@@ -329,8 +416,16 @@ function PeriodDetailPanel({
         <div className="px-5 py-4 border-b border-gray-800">
           <p className="text-[10px] text-green-400 uppercase tracking-widest font-bold mb-3">Income</p>
           {incomeItems.map(({ source, entry }) => (
-            <div key={source.id} className="flex justify-between items-center py-1.5">
-              <span className="text-xs text-gray-300">{source.name}</span>
+            <div key={source.id} className="flex items-center gap-2 py-1.5">
+              {batchState === 'selecting' && !entry.isReconciled && (
+                <input
+                  type="checkbox"
+                  checked={checkedIncome.has(entry.id)}
+                  onChange={() => toggleIncome(entry.id)}
+                  className="shrink-0 accent-green-500 cursor-pointer"
+                />
+              )}
+              <span className="text-xs text-gray-300 flex-1">{source.name}</span>
               <div className="text-right">
                 {entry.isReconciled ? (
                   <>
@@ -352,17 +447,26 @@ function PeriodDetailPanel({
           <p className="text-[10px] text-blue-400 uppercase tracking-widest font-bold mb-3">{group}</p>
           {templates.map((t) => {
             const inst = billGrid.instanceMap[t.id][period.id];
+            const color = t.billType === 'SAVINGS' ? 'text-emerald-300' : t.billType === 'TRANSFER' ? 'text-sky-300' : 'text-orange-300';
             return (
-              <div key={t.id} className="flex justify-between items-center py-1.5">
-                <span className="text-xs text-gray-300">{t.name}</span>
+              <div key={t.id} className="flex items-center gap-2 py-1.5">
+                {batchState === 'selecting' && !inst.isReconciled && (
+                  <input
+                    type="checkbox"
+                    checked={checkedBills.has(inst.id)}
+                    onChange={() => toggleBill(inst.id)}
+                    className="shrink-0 accent-green-500 cursor-pointer"
+                  />
+                )}
+                <span className="text-xs text-gray-300 flex-1">{t.name}</span>
                 <div className="text-right">
                   {inst.isReconciled ? (
                     <>
                       <span className="text-xs text-gray-600 line-through mr-2">{fmt(inst.projectedAmount)}</span>
-                      <span className="text-xs text-orange-300 font-medium">{fmt(inst.actualAmount)}</span>
+                      <span className={`text-xs ${color} font-medium`}>{fmt(inst.actualAmount)}</span>
                     </>
                   ) : (
-                    <span className="text-xs text-orange-300/60">{fmt(inst.projectedAmount)}</span>
+                    <span className={`text-xs ${color}/60`}>{fmt(inst.projectedAmount)}</span>
                   )}
                 </div>
               </div>
@@ -481,6 +585,15 @@ function BillRow({
         }
         const mode   = activeCell?.id === inst.id ? activeCell.mode : null;
         const amount = inst.isReconciled ? (inst.actualAmount ?? inst.projectedAmount) : inst.projectedAmount;
+        const billColor = inst.isReconciled
+          ? 'text-gray-500'
+          : amount === 0
+            ? 'text-gray-600'
+            : template.billType === 'SAVINGS'
+              ? 'text-emerald-300'
+              : template.billType === 'TRANSFER'
+                ? 'text-sky-300'
+                : 'text-orange-300';
         return (
           <td key={p.id} className={`py-1 px-2 text-center ${isSel ? 'bg-blue-950/20' : ''}`}>
             {mode === 'reconcile' ? (
@@ -508,7 +621,7 @@ function BillRow({
               <ReconcileCell
                 amount={amount}
                 isReconciled={inst.isReconciled}
-                colorClass={inst.isReconciled ? 'text-gray-500' : amount > 0 ? 'text-orange-300' : 'text-gray-600'}
+                colorClass={billColor}
                 onClick={() => setActiveCell({ type: 'bill', id: inst.id, mode: inst.isFrozen ? 'unreconcile' : 'reconcile' })}
                 title={inst.isFrozen ? 'Click to un-reconcile' : 'Click to reconcile'}
               />

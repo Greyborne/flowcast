@@ -6,6 +6,9 @@ import {
   unreconcileBill,
   setCurrentBalance,
 } from '../services/cascadeService';
+import prisma from '../models/prisma';
+import { recomputeFromPeriod } from '../services/projectionEngine';
+import { broadcast } from '../websocket/wsServer';
 
 const router = Router();
 
@@ -54,6 +57,70 @@ router.delete('/bill/:id', async (req: Request, res: Response) => {
     res.json({ success: true, message: 'Bill un-reconciled and unfrozen' });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Un-reconcile failed' });
+  }
+});
+
+// POST /api/reconciliation/period/:id/batch — reconcile selected items at projected amounts
+// Body: { billInstanceIds?: string[], incomeEntryIds?: string[] }
+// If arrays omitted, reconciles all unreconciled items in the period.
+router.post('/period/:id/batch', async (req: Request, res: Response) => {
+  try {
+    const payPeriodId = req.params.id;
+    await prisma.payPeriod.findUniqueOrThrow({ where: { id: payPeriodId } });
+
+    const { billInstanceIds, incomeEntryIds } = req.body as {
+      billInstanceIds?: string[];
+      incomeEntryIds?: string[];
+    };
+
+    const [bills, entries] = await Promise.all([
+      prisma.billInstance.findMany({
+        where: {
+          payPeriodId,
+          isReconciled: false,
+          isFrozen: false,
+          ...(billInstanceIds ? { id: { in: billInstanceIds } } : {}),
+        },
+      }),
+      prisma.incomeEntry.findMany({
+        where: {
+          payPeriodId,
+          isReconciled: false,
+          ...(incomeEntryIds ? { id: { in: incomeEntryIds } } : {}),
+        },
+      }),
+    ]);
+
+    const now = new Date();
+
+    for (const bill of bills) {
+      await prisma.billInstance.update({
+        where: { id: bill.id },
+        data: { actualAmount: bill.projectedAmount, isReconciled: true, isFrozen: true, reconciledAt: now },
+      });
+      await prisma.reconciliationLog.create({
+        data: { resourceType: 'bill', resourceId: bill.id, action: 'reconcile_batch',
+          previousValue: bill.projectedAmount, newValue: bill.projectedAmount, periodsAffected: 1 },
+      });
+    }
+
+    for (const entry of entries) {
+      await prisma.incomeEntry.update({
+        where: { id: entry.id },
+        data: { actualAmount: entry.projectedAmount, isReconciled: true, reconciledAt: now },
+      });
+      await prisma.reconciliationLog.create({
+        data: { resourceType: 'income', resourceId: entry.id, action: 'reconcile_batch',
+          previousValue: entry.projectedAmount, newValue: entry.projectedAmount, periodsAffected: 1 },
+      });
+    }
+
+    const affectedIds = await recomputeFromPeriod(payPeriodId);
+    broadcast({ type: 'BALANCE_UPDATE', payPeriodIds: affectedIds });
+
+    res.json({ success: true, billsReconciled: bills.length, incomeReconciled: entries.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
