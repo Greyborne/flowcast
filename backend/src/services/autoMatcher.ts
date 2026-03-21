@@ -133,12 +133,14 @@ export async function findMatchCandidates(
 
       const instancedTemplateIds = new Set(instances.map((i) => i.billTemplateId));
 
-      // Also include active templates with no instances at all (discretionary / ad-hoc)
+      // Also include templates not already represented by an unreconciled instance above.
+      // This covers: (a) truly discretionary templates with no instances ever, and
+      // (b) templates whose instances are all reconciled — user can still match to them
+      // and the backend will create/upsert an instance for the right pay period.
       const templates = await prisma.billTemplate.findMany({
         where: {
           isActive: true,
           name: { contains: term },
-          billInstances: { none: {} },
         },
       });
 
