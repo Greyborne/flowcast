@@ -75,3 +75,64 @@ export function useSetBalance() {
     await axios.post(`${API}/api/reconciliation/balance`, { amount });
   };
 }
+
+// ── Close Period Preview ───────────────────────────────────────────────────────
+
+export interface ClosePreviewItem { id: string; name: string; projectedAmount?: number; actualAmount?: number | null; group?: string; isReconciled?: boolean; defaultAmount?: number; }
+
+export interface ClosePeriodPreview {
+  isClosed: boolean;
+  openingBalance: number;
+  runningBalance: number;
+  incomeToReconcile: ClosePreviewItem[];
+  incomeReconciled: ClosePreviewItem[];
+  fixedToReconcile: ClosePreviewItem[];
+  fixedReconciled: ClosePreviewItem[];
+  discretionaryTemplates: ClosePreviewItem[];
+  discretionaryReconciled: ClosePreviewItem[];
+}
+
+export function useClosePeriodPreview(periodId: string | null) {
+  return useQuery<ClosePeriodPreview>({
+    queryKey: ['closePeriodPreview', periodId],
+    queryFn: async () => {
+      const { data } = await axios.get(`${API}/api/pay-periods/${periodId}/close-preview`);
+      return data;
+    },
+    enabled: !!periodId,
+  });
+}
+
+export function useClosePeriod() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ periodId, discretionaryAmounts }: {
+      periodId: string;
+      discretionaryAmounts: { billTemplateId: string; amount: number }[];
+    }) => {
+      const { data } = await axios.post(`${API}/api/pay-periods/${periodId}/close`, { discretionaryAmounts });
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['payPeriods'] });
+      qc.invalidateQueries({ queryKey: ['billGrid'] });
+      qc.invalidateQueries({ queryKey: ['incomeGrid'] });
+      qc.invalidateQueries({ queryKey: ['closePeriodPreview'] });
+    },
+  });
+}
+
+export function useReopenPeriod() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (periodId: string) => {
+      const { data } = await axios.post(`${API}/api/pay-periods/${periodId}/reopen`);
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['payPeriods'] });
+      qc.invalidateQueries({ queryKey: ['billGrid'] });
+      qc.invalidateQueries({ queryKey: ['incomeGrid'] });
+    },
+  });
+}

@@ -148,18 +148,20 @@ async function main() {
   }
   console.log(`✓ Created ${INCOME_SOURCES.length} income sources`);
 
-  // Seed app settings
+  // Seed app settings (always overwrite billGroups to match seeded templates)
+  const groups = [...new Set(BILL_TEMPLATES.map((b) => b.group))];
   const defaultSettings = [
     { key: 'currentBankBalance', value: '252.98' },
-    { key: 'payScheduleAnchor',  value: '2026-03-14' }, // First/anchor payday
-    { key: 'payFrequency',       value: 'biweekly' },   // weekly | biweekly | monthly
+    { key: 'payScheduleAnchor',  value: '2026-03-14' },
+    { key: 'payFrequency',       value: 'biweekly' },
     { key: 'projectionYears',    value: '2' },
+    { key: 'billGroups',         value: JSON.stringify(groups) },
   ];
   for (const setting of defaultSettings) {
     await prisma.appSetting.upsert({
       where: { key: setting.key },
       create: setting,
-      update: {},
+      update: { value: setting.value },
     });
   }
   console.log('✓ Seeded app settings');

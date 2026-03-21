@@ -15,6 +15,17 @@ export interface AutoMatchResult {
   ruleId: string;
 }
 
+export interface MatchCandidate {
+  kind: 'INSTANCE' | 'TEMPLATE';
+  id: string;            // billInstanceId or billTemplateId (for TEMPLATE kind)
+  templateId: string;    // always the billTemplateId or incomeSourceId
+  payPeriodId: string | null;
+  name: string;
+  projectedAmount: number;
+  paydayDate: Date | null;
+  type: 'BILL' | 'INCOME';
+}
+
 function testRule(description: string, pattern: string, matchType: string): boolean {
   const haystack = description.toLowerCase();
   const needle = pattern.toLowerCase();
@@ -55,65 +66,170 @@ export async function findAutoMatch(description: string): Promise<AutoMatchResul
 }
 
 /**
- * Find candidate bill instances or income entries within ±14 days of the
- * transaction date that are unreconciled and match the target template/source.
+ * Find match candidates for a transaction.
+ *
+ * - No search: unreconciled instances within ±14 days of transaction date.
+ * - With search: ALL unreconciled instances matching the name, plus active
+ *   templates/sources that have no instance in any period (discretionary
+ *   expenses like restaurant, grocery, etc.).
+ *
+ * Negative amount → suggest bills/expenses.
+ * Positive amount → suggest income entries.
  */
 export async function findMatchCandidates(
   date: Date,
   amount: number,
+  search?: string,
   windowDays = 14,
-): Promise<{
-  bills: { id: string; payPeriodId: string; templateName: string; projectedAmount: number; paydayDate: Date }[];
-  income: { id: string; payPeriodId: string; sourceName: string; projectedAmount: number; paydayDate: Date }[];
-}> {
-  const windowMs = windowDays * 24 * 60 * 60 * 1000;
-  const from = new Date(date.getTime() - windowMs);
-  const to = new Date(date.getTime() + windowMs);
+): Promise<MatchCandidate[]> {
+  const candidates: MatchCandidate[] = [];
+  const isExpense = amount < 0;
 
-  const [bills, income] = await Promise.all([
-    prisma.billInstance.findMany({
-      where: {
-        isReconciled: false,
-        payPeriod: { paydayDate: { gte: from, lte: to } },
-      },
-      include: {
-        billTemplate: { select: { name: true } },
-        payPeriod: { select: { paydayDate: true } },
-      },
-      orderBy: { payPeriod: { paydayDate: 'asc' } },
-    }),
-    prisma.incomeEntry.findMany({
-      where: {
-        isReconciled: false,
-        payPeriod: { paydayDate: { gte: from, lte: to } },
-      },
-      include: {
-        incomeSource: { select: { name: true } },
-        payPeriod: { select: { paydayDate: true } },
-      },
-      orderBy: { payPeriod: { paydayDate: 'asc' } },
-    }),
-  ]);
+  if (isExpense) {
+    if (search && search.trim().length > 0) {
+      // Search mode: all unreconciled instances matching name + discretionary templates
+      const term = search.trim().toLowerCase();
 
-  // For expenses (negative amount) suggest bill instances; for income (positive) suggest income entries
-  return {
-    bills: amount < 0
-      ? bills.map((b) => ({
-          id: b.id,
-          payPeriodId: b.payPeriodId,
-          templateName: b.billTemplate.name,
-          projectedAmount: b.projectedAmount,
-          paydayDate: b.payPeriod.paydayDate,
-        }))
-      : [],
-    income: amount > 0
-      ? income.map((e) => ({
-          id: e.id,
-          payPeriodId: e.payPeriodId,
-          sourceName: e.incomeSource.name,
-          projectedAmount: e.projectedAmount,
-          paydayDate: e.payPeriod.paydayDate,
-        }))
-      : [],
-  };
+      const instances = await prisma.billInstance.findMany({
+        where: {
+          isReconciled: false,
+          billTemplate: { name: { contains: term }, isActive: true },
+        },
+        include: {
+          billTemplate: { select: { id: true, name: true, defaultAmount: true } },
+          payPeriod: { select: { id: true, paydayDate: true } },
+        },
+        orderBy: { payPeriod: { paydayDate: 'asc' } },
+      });
+
+      const instancedTemplateIds = new Set(instances.map((i) => i.billTemplateId));
+
+      // Also include active templates with no instances at all (discretionary / ad-hoc)
+      const templates = await prisma.billTemplate.findMany({
+        where: {
+          isActive: true,
+          name: { contains: term },
+          billInstances: { none: {} },
+        },
+      });
+
+      for (const inst of instances) {
+        candidates.push({
+          kind: 'INSTANCE',
+          id: inst.id,
+          templateId: inst.billTemplateId,
+          payPeriodId: inst.payPeriodId,
+          name: inst.billTemplate.name,
+          projectedAmount: inst.projectedAmount,
+          paydayDate: inst.payPeriod.paydayDate,
+          type: 'BILL',
+        });
+      }
+
+      for (const tmpl of templates) {
+        if (!instancedTemplateIds.has(tmpl.id)) {
+          candidates.push({
+            kind: 'TEMPLATE',
+            id: tmpl.id,
+            templateId: tmpl.id,
+            payPeriodId: null,
+            name: tmpl.name,
+            projectedAmount: tmpl.defaultAmount,
+            paydayDate: null,
+            type: 'BILL',
+          });
+        }
+      }
+    } else {
+      // Date-window mode: ±14 days
+      const windowMs = windowDays * 24 * 60 * 60 * 1000;
+      const from = new Date(date.getTime() - windowMs);
+      const to = new Date(date.getTime() + windowMs);
+
+      const instances = await prisma.billInstance.findMany({
+        where: {
+          isReconciled: false,
+          payPeriod: { paydayDate: { gte: from, lte: to } },
+        },
+        include: {
+          billTemplate: { select: { id: true, name: true } },
+          payPeriod: { select: { id: true, paydayDate: true } },
+        },
+        orderBy: [{ billTemplate: { name: 'asc' } }, { payPeriod: { paydayDate: 'asc' } }],
+      });
+
+      for (const inst of instances) {
+        candidates.push({
+          kind: 'INSTANCE',
+          id: inst.id,
+          templateId: inst.billTemplateId,
+          payPeriodId: inst.payPeriodId,
+          name: inst.billTemplate.name,
+          projectedAmount: inst.projectedAmount,
+          paydayDate: inst.payPeriod.paydayDate,
+          type: 'BILL',
+        });
+      }
+    }
+  } else {
+    if (search && search.trim().length > 0) {
+      const term = search.trim().toLowerCase();
+
+      const entries = await prisma.incomeEntry.findMany({
+        where: {
+          isReconciled: false,
+          incomeSource: { name: { contains: term }, isActive: true },
+        },
+        include: {
+          incomeSource: { select: { id: true, name: true, defaultAmount: true } },
+          payPeriod: { select: { id: true, paydayDate: true } },
+        },
+        orderBy: { payPeriod: { paydayDate: 'asc' } },
+      });
+
+      for (const entry of entries) {
+        candidates.push({
+          kind: 'INSTANCE',
+          id: entry.id,
+          templateId: entry.incomeSourceId,
+          payPeriodId: entry.payPeriodId,
+          name: entry.incomeSource.name,
+          projectedAmount: entry.projectedAmount,
+          paydayDate: entry.payPeriod.paydayDate,
+          type: 'INCOME',
+        });
+      }
+    } else {
+      const windowMs = windowDays * 24 * 60 * 60 * 1000;
+      const from = new Date(date.getTime() - windowMs);
+      const to = new Date(date.getTime() + windowMs);
+
+      const entries = await prisma.incomeEntry.findMany({
+        where: {
+          isReconciled: false,
+          payPeriod: { paydayDate: { gte: from, lte: to } },
+        },
+        include: {
+          incomeSource: { select: { id: true, name: true } },
+          payPeriod: { select: { id: true, paydayDate: true } },
+        },
+        orderBy: [{ incomeSource: { name: 'asc' } }, { payPeriod: { paydayDate: 'asc' } }],
+      });
+
+      for (const entry of entries) {
+        candidates.push({
+          kind: 'INSTANCE',
+          id: entry.id,
+          templateId: entry.incomeSourceId,
+          payPeriodId: entry.payPeriodId,
+          name: entry.incomeSource.name,
+          projectedAmount: entry.projectedAmount,
+          paydayDate: entry.payPeriod.paydayDate,
+          type: 'INCOME',
+        });
+      }
+    }
+  }
+
+  return candidates;
 }

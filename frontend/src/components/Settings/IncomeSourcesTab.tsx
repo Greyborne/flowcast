@@ -215,7 +215,7 @@ export default function IncomeSourcesTab() {
   const [showArchived, setShowArchived] = useState(false);
 
   if (isLoading) {
-    return <div className="flex items-center justify-center h-48 text-gray-500">Loading income sources...</div>;
+    return <div className="flex items-center justify-center h-48 text-gray-500">Loading income…</div>;
   }
 
   const active   = sources?.filter((s) => s.isActive) ?? [];
@@ -233,7 +233,7 @@ export default function IncomeSourcesTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500">{active.length} active income sources</p>
+        <p className="text-sm text-gray-500">{active.length} active</p>
         <button
           onClick={() => { setShowAdd(true); setEditingId(null); }}
           className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg transition-colors"
@@ -260,11 +260,11 @@ export default function IncomeSourcesTab() {
       {/* Active sources */}
       <section className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
         <div className="px-4 py-2 bg-gray-800/60 border-b border-gray-800">
-          <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Income Sources</span>
+          <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Income</span>
         </div>
         <div className="divide-y divide-gray-800/50">
           {active.length === 0 && (
-            <p className="px-4 py-6 text-sm text-gray-600 text-center">No income sources. Add one above.</p>
+            <p className="px-4 py-6 text-sm text-gray-600 text-center">No income. Add one above.</p>
           )}
           {active.map((s, idx) => {
             const currentPosition = idx === 0 ? null : active[idx - 1].id;

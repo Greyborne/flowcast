@@ -1,8 +1,9 @@
 import { useState, Fragment, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { useQueryClient } from '@tanstack/react-query';
-import { usePayPeriods, useBillGrid, useIncomeGrid, useCreateAdhocBill } from '../../hooks/usePayPeriods';
+import { usePayPeriods, useBillGrid, useIncomeGrid, useCreateAdhocBill, useReopenPeriod } from '../../hooks/usePayPeriods';
 import type { PayPeriod, BillTemplate, BillGridInstance, IncomeSource, IncomeGridEntry } from '../../types';
+import ClosePeriodModal from './ClosePeriodModal';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -116,6 +117,7 @@ export default function ProjectionGrid() {
                     }`}
                   >
                     {fmtDate(p.paydayDate)}
+                    {p.isClosed && <span className="ml-1 opacity-60">🔒</span>}
                     {isNegative && !isSel && <span className="ml-1">⚠</span>}
                     {isSel && <span className="ml-1 text-blue-400">›</span>}
                   </th>
@@ -254,6 +256,8 @@ function PeriodDetailPanel({
   const [checkedBills,    setCheckedBills]    = useState<Set<string>>(new Set());
   const [checkedIncome,   setCheckedIncome]   = useState<Set<string>>(new Set());
   const [activePanelCell, setActivePanelCell] = useState<ActiveCell>(null);
+  const [showCloseModal,  setShowCloseModal]  = useState(false);
+  const reopenMutation = useReopenPeriod();
 
   const projected = period.balanceSnapshot?.runningBalance;
   const planned   = period.balanceSnapshot?.plannedBalance;
@@ -334,7 +338,12 @@ function PeriodDetailPanel({
         <div>
           <p className="text-[10px] text-gray-500 uppercase tracking-widest">Pay Period Detail</p>
           <h2 className="text-white font-bold text-lg leading-tight">{fmtDate(period.paydayDate)}</h2>
-          {unreconciledCount > 0 && batchState === 'idle' && (
+          {period.isClosed && (
+            <span className="mt-1 inline-flex items-center gap-1 text-[10px] text-gray-500 border border-gray-700 px-2 py-0.5 rounded">
+              🔒 Closed
+            </span>
+          )}
+          {unreconciledCount > 0 && batchState === 'idle' && !period.isClosed && (
             <div className="mt-2">
               <button
                 onClick={enterSelecting}
@@ -365,12 +374,30 @@ function PeriodDetailPanel({
             <p className="mt-2 text-[11px] text-gray-500">Reconciling…</p>
           )}
         </div>
-        <button
-          onClick={onClose}
-          className="text-gray-500 hover:text-white text-xl leading-none mt-1 transition-colors"
-        >
-          ✕
-        </button>
+        <div className="flex flex-col items-end gap-2">
+          {!period.isClosed ? (
+            <button
+              onClick={() => setShowCloseModal(true)}
+              className="text-[11px] px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white border border-gray-700 transition-colors"
+            >
+              🔒 Close Period
+            </button>
+          ) : (
+            <button
+              onClick={() => reopenMutation.mutate(period.id)}
+              disabled={reopenMutation.isPending}
+              className="text-[11px] px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white border border-gray-700 transition-colors disabled:opacity-50"
+            >
+              🔓 Reopen
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="text-gray-500 hover:text-white text-xl leading-none transition-colors"
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
       {/* Balance comparison */}
@@ -437,14 +464,10 @@ function PeriodDetailPanel({
                     className={`text-right shrink-0 rounded px-1 transition-colors ${batchState === 'idle' ? 'hover:bg-gray-800 cursor-pointer' : 'cursor-default'}`}
                     title={batchState === 'idle' ? (entry.isReconciled ? 'Click to un-reconcile' : 'Click to reconcile') : undefined}
                   >
-                    {entry.isReconciled ? (
-                      <>
-                        <span className="text-xs text-gray-600 line-through mr-2">{fmt(entry.projectedAmount)}</span>
-                        <span className="text-xs text-green-300 font-medium">{fmt(entry.actualAmount)}</span>
-                      </>
-                    ) : (
-                      <span className="text-xs text-green-300/60">{fmt(entry.projectedAmount)}</span>
-                    )}
+                    <span className="inline-flex items-center gap-1 text-xs text-green-300">
+                      <span>{fmt(entry.isReconciled ? entry.actualAmount : entry.projectedAmount)}</span>
+                      <span className="w-3 text-left">{entry.isReconciled ? '✓' : ''}</span>
+                    </span>
                   </button>
                 )}
               </div>
@@ -513,14 +536,10 @@ function PeriodDetailPanel({
                       className={`text-right shrink-0 rounded px-1 transition-colors ${batchState === 'idle' ? 'hover:bg-gray-800 cursor-pointer' : 'cursor-default'}`}
                       title={batchState === 'idle' ? (inst.isFrozen ? 'Click to un-reconcile' : 'Click to reconcile') : undefined}
                     >
-                      {inst.isReconciled ? (
-                        <>
-                          <span className="text-xs text-gray-600 line-through mr-2">{fmt(inst.projectedAmount)}</span>
-                          <span className={`text-xs ${color} font-medium`}>{fmt(inst.actualAmount)}</span>
-                        </>
-                      ) : (
-                        <span className={`text-xs ${color}/60`}>{fmt(inst.projectedAmount)}</span>
-                      )}
+                      <span className={`inline-flex items-center gap-1 text-xs ${color}`}>
+                        <span>{fmt(inst.isReconciled ? inst.actualAmount : inst.projectedAmount)}</span>
+                        <span className="w-3 text-left">{inst.isReconciled ? '✓' : ''}</span>
+                      </span>
                     </button>
                   )}
                 </div>
@@ -561,6 +580,14 @@ function PeriodDetailPanel({
           })}
         </div>
       ))}
+
+      {showCloseModal && (
+        <ClosePeriodModal
+          periodId={period.id}
+          paydayLabel={fmtDate(period.paydayDate)}
+          onClose={() => setShowCloseModal(false)}
+        />
+      )}
     </div>
   );
 }
@@ -621,7 +648,7 @@ function IncomeRow({
               <ReconcileCell
                 amount={entry.isReconciled ? (entry.actualAmount ?? entry.projectedAmount) : entry.projectedAmount}
                 isReconciled={entry.isReconciled}
-                colorClass={entry.isReconciled ? 'text-gray-500' : 'text-green-300'}
+                colorClass="text-green-300"
                 onClick={() => setActiveCell({ type: 'income', id: entry.id, mode: entry.isReconciled ? 'unreconcile' : 'reconcile' })}
                 title={entry.isReconciled ? 'Click to un-reconcile' : 'Click to reconcile'}
               />
@@ -672,15 +699,13 @@ function BillRow({
         }
         const mode   = activeCell?.id === inst.id ? activeCell.mode : null;
         const amount = inst.isReconciled ? (inst.actualAmount ?? inst.projectedAmount) : inst.projectedAmount;
-        const billColor = inst.isReconciled
-          ? 'text-gray-500'
-          : amount === 0
-            ? 'text-gray-600'
-            : template.billType === 'SAVINGS'
-              ? 'text-emerald-300'
-              : template.billType === 'TRANSFER'
-                ? 'text-sky-300'
-                : 'text-orange-300';
+        const billColor = amount === 0
+          ? 'text-gray-600'
+          : template.billType === 'SAVINGS'
+            ? 'text-emerald-300'
+            : template.billType === 'TRANSFER'
+              ? 'text-sky-300'
+              : 'text-orange-300';
         return (
           <td key={p.id} className={`py-1 px-2 text-center ${isSel ? 'bg-blue-950/20' : ''}`}>
             {mode === 'reconcile' ? (
@@ -735,11 +760,13 @@ function ReconcileCell({
     <button
       onClick={onClick}
       title={title}
-      className={`w-full text-xs whitespace-nowrap px-1 py-1 rounded hover:bg-gray-800 transition-colors ${colorClass} ${
-        isReconciled ? 'line-through cursor-default' : 'cursor-pointer'
-      }`}
+      className={`w-full text-xs whitespace-nowrap px-1 py-1 rounded hover:bg-gray-800 transition-colors ${colorClass} cursor-pointer`}
     >
-      {amount > 0 ? fmt(amount) : '—'}
+      <span className="inline-grid w-full" style={{ gridTemplateColumns: '1fr auto 1fr' }}>
+        <span />
+        <span>{amount > 0 ? fmt(amount) : '—'}</span>
+        <span className="text-right pl-1">{isReconciled && amount > 0 ? '✓' : ''}</span>
+      </span>
     </button>
   );
 }

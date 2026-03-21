@@ -262,10 +262,30 @@ router.post('/', async (req: Request, res: Response) => {
 router.put('/:id', async (req: Request, res: Response) => {
   try {
     const { name, group, billType, dueDayOfMonth, defaultAmount, isActive, isDiscretionary, notes, positionAfterId } = req.body;
+    const existing = await prisma.billTemplate.findUniqueOrThrow({ where: { id: req.params.id } });
     const bill = await prisma.billTemplate.update({
       where: { id: req.params.id },
       data: { name, group, billType, dueDayOfMonth, defaultAmount, isActive, isDiscretionary, notes },
     });
+
+    // If defaultAmount changed, cascade to all future unreconciled instances
+    if (typeof defaultAmount === 'number' && defaultAmount !== existing.defaultAmount) {
+      await prisma.billInstance.updateMany({
+        where: { billTemplateId: req.params.id, isReconciled: false },
+        data: { projectedAmount: defaultAmount },
+      });
+      // Recompute balances from the earliest affected period
+      const earliest = await prisma.billInstance.findFirst({
+        where: { billTemplateId: req.params.id, isReconciled: false },
+        orderBy: { payPeriod: { paydayDate: 'asc' } },
+        select: { payPeriodId: true },
+      });
+      if (earliest) {
+        const affectedIds = await recomputeFromPeriod(earliest.payPeriodId);
+        broadcast({ type: 'BALANCE_UPDATE', payPeriodIds: affectedIds });
+      }
+    }
+
     // Reorder if a position was explicitly chosen
     if ('positionAfterId' in req.body) {
       await reorderGroup(req.params.id, bill.group, positionAfterId);

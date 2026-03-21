@@ -9,6 +9,7 @@ export interface PayPeriod {
   endDate: string;
   paydayDate: string;
   openingBalance: number;
+  isClosed: boolean;
   balanceSnapshot?: BalanceSnapshot;
 }
 
@@ -205,6 +206,12 @@ export interface ImportResult {
 }
 
 export interface MatchCandidate {
-  bills: { id: string; payPeriodId: string; templateName: string; projectedAmount: number; paydayDate: string }[];
-  income: { id: string; payPeriodId: string; sourceName: string; projectedAmount: number; paydayDate: string }[];
+  kind: 'INSTANCE' | 'TEMPLATE';
+  id: string;
+  templateId: string;
+  payPeriodId: string | null;
+  name: string;
+  projectedAmount: number;
+  paydayDate: string | null;
+  type: 'BILL' | 'INCOME';
 }

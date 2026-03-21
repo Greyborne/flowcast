@@ -240,11 +240,12 @@ router.get('/', async (req: Request, res: Response) => {
 
 // ── Match Candidates ──────────────────────────────────────────────────────────
 
-// GET /api/transactions/:id/candidates — unreconciled instances near this transaction's date
+// GET /api/transactions/:id/candidates?search= — candidates near date or matching search
 router.get('/:id/candidates', async (req: Request, res: Response) => {
   try {
     const txn = await prisma.transaction.findUniqueOrThrow({ where: { id: req.params.id } });
-    const candidates = await findMatchCandidates(txn.date, txn.amount);
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+    const candidates = await findMatchCandidates(txn.date, txn.amount, search);
     res.json(candidates);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -254,11 +255,14 @@ router.get('/:id/candidates', async (req: Request, res: Response) => {
 // ── Match / Unmatch ───────────────────────────────────────────────────────────
 
 // PATCH /api/transactions/:id/match
+// Body: { billInstanceId } | { billTemplateId } | { incomeEntryId }
+// billTemplateId is used for discretionary expenses with no existing instance —
+// the backend finds the containing pay period and upserts an instance.
 router.patch('/:id/match', async (req: Request, res: Response) => {
   try {
-    const { billInstanceId, incomeEntryId } = req.body;
-    if (!billInstanceId && !incomeEntryId) {
-      return res.status(400).json({ error: 'billInstanceId or incomeEntryId required' });
+    const { billInstanceId, billTemplateId, incomeEntryId } = req.body;
+    if (!billInstanceId && !billTemplateId && !incomeEntryId) {
+      return res.status(400).json({ error: 'billInstanceId, billTemplateId, or incomeEntryId required' });
     }
 
     const txn = await prisma.transaction.findUniqueOrThrow({ where: { id: req.params.id } });
@@ -277,7 +281,8 @@ router.patch('/:id/match', async (req: Request, res: Response) => {
       });
     }
 
-    // Set new match and reconcile
+    let resolvedBillInstanceId: string | null = null;
+    let resolvedIncomeEntryId: string | null = null;
     let payPeriodId: string | null = null;
 
     if (billInstanceId) {
@@ -285,19 +290,59 @@ router.patch('/:id/match', async (req: Request, res: Response) => {
         where: { id: billInstanceId },
         data: { isReconciled: true, actualAmount: Math.abs(txn.amount), reconciledAt: new Date() },
       });
+      resolvedBillInstanceId = inst.id;
       payPeriodId = inst.payPeriodId;
+    } else if (billTemplateId) {
+      // Discretionary template — find the pay period containing the transaction date,
+      // then upsert a bill instance for it.
+      const template = await prisma.billTemplate.findUniqueOrThrow({ where: { id: billTemplateId } });
+      const period = await prisma.payPeriod.findFirst({
+        where: {
+          startDate: { lte: txn.date },
+          endDate: { gte: txn.date },
+        },
+      }) ?? await prisma.payPeriod.findFirst({
+        // Fallback: nearest period by payday if transaction date doesn't fall in any period
+        orderBy: { paydayDate: 'asc' },
+        where: { paydayDate: { gte: txn.date } },
+      }) ?? await prisma.payPeriod.findFirst({
+        orderBy: { paydayDate: 'desc' },
+      });
+
+      if (!period) return res.status(400).json({ error: 'No pay periods found' });
+
+      const inst = await prisma.billInstance.upsert({
+        where: { payPeriodId_billTemplateId: { payPeriodId: period.id, billTemplateId: template.id } },
+        create: {
+          payPeriodId: period.id,
+          billTemplateId: template.id,
+          projectedAmount: template.defaultAmount,
+          isReconciled: true,
+          actualAmount: Math.abs(txn.amount),
+          reconciledAt: new Date(),
+        },
+        update: {
+          isReconciled: true,
+          actualAmount: Math.abs(txn.amount),
+          reconciledAt: new Date(),
+        },
+      });
+      resolvedBillInstanceId = inst.id;
+      payPeriodId = period.id;
     }
+
     if (incomeEntryId) {
       const entry = await prisma.incomeEntry.update({
         where: { id: incomeEntryId },
         data: { isReconciled: true, actualAmount: Math.abs(txn.amount), reconciledAt: new Date() },
       });
+      resolvedIncomeEntryId = entry.id;
       payPeriodId = entry.payPeriodId;
     }
 
     await prisma.transaction.update({
       where: { id: req.params.id },
-      data: { billInstanceId: billInstanceId ?? null, incomeEntryId: incomeEntryId ?? null, status: 'MATCHED' },
+      data: { billInstanceId: resolvedBillInstanceId, incomeEntryId: resolvedIncomeEntryId, status: 'MATCHED' },
     });
 
     if (payPeriodId) {

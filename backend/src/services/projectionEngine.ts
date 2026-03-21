@@ -63,11 +63,10 @@ export function billFallsInPeriod(
 ): boolean {
   const checkMonth = (year: number, month: number): boolean => {
     try {
-      // Due date is DOT+1 offset (matches spreadsheet formula)
-      const dueDate = setDate(new Date(year, month - 1, 1), dueDayOfMonth + 1);
+      const dueDate = setDate(new Date(year, month - 1, 1), dueDayOfMonth);
       return isWithinInterval(dueDate, {
         start: periodStart,
-        end: addDays(periodEnd, -1),
+        end: periodEnd,
       });
     } catch {
       return false;

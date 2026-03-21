@@ -31,11 +31,12 @@ export function useTransactions(filters: TransactionFilters = {}) {
   });
 }
 
-export function useMatchCandidates(transactionId: string | null) {
-  return useQuery<MatchCandidate>({
-    queryKey: ['matchCandidates', transactionId],
+export function useMatchCandidates(transactionId: string | null, search?: string) {
+  return useQuery<MatchCandidate[]>({
+    queryKey: ['matchCandidates', transactionId, search],
     queryFn: async () => {
-      const { data } = await axios.get(`${API}/api/transactions/${transactionId}/candidates`);
+      const params = search ? `?search=${encodeURIComponent(search)}` : '';
+      const { data } = await axios.get(`${API}/api/transactions/${transactionId}/candidates${params}`);
       return data;
     },
     enabled: !!transactionId,
@@ -62,9 +63,9 @@ export function useImportTransactions() {
 
 export function useMatchTransaction() {
   const qc = useQueryClient();
-  return useMutation<void, Error, { id: string; billInstanceId?: string; incomeEntryId?: string }>({
-    mutationFn: async ({ id, billInstanceId, incomeEntryId }) => {
-      await axios.patch(`${API}/api/transactions/${id}/match`, { billInstanceId, incomeEntryId });
+  return useMutation<void, Error, { id: string; billInstanceId?: string; billTemplateId?: string; incomeEntryId?: string }>({
+    mutationFn: async ({ id, billInstanceId, billTemplateId, incomeEntryId }) => {
+      await axios.patch(`${API}/api/transactions/${id}/match`, { billInstanceId, billTemplateId, incomeEntryId });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['transactions'] });

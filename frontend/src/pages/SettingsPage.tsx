@@ -6,8 +6,8 @@ import DataManagementTab from '../components/Settings/DataManagementTab';
 
 const TABS = [
   { id: 'schedule',  label: 'Schedule & Balance' },
-  { id: 'bills',     label: 'Bill Templates' },
-  { id: 'income',    label: 'Income Sources' },
+  { id: 'bills',     label: 'Expenses' },
+  { id: 'income',    label: 'Income' },
   { id: 'data',      label: 'Data Management' },
 ] as const;
 
@@ -20,7 +20,7 @@ export default function SettingsPage() {
     <div className="max-w-4xl mx-auto space-y-6">
       <div>
         <h2 className="text-2xl font-bold text-white">Settings</h2>
-        <p className="text-sm text-gray-500 mt-1">Manage your pay schedule, bill templates, and income sources.</p>
+        <p className="text-sm text-gray-500 mt-1">Manage your pay schedule, expenses, and income.</p>
       </div>
 
       {/* ── Tab Bar ── */}

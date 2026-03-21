@@ -105,6 +105,7 @@ interface EditFormProps {
 
 function EditForm({ initial, allGroups, groupBills, currentPosition, onGroupChange, onSave, onCancel, saving }: EditFormProps) {
   const [form, setForm] = useState<BillTemplateForm>(initial);
+  const [amountStr, setAmountStr] = useState(String(initial.defaultAmount ?? 0));
   const defaultPosition = currentPosition !== undefined
     ? currentPosition
     : (groupBills.length > 0 ? groupBills[groupBills.length - 1].id : null);
@@ -166,8 +167,14 @@ function EditForm({ initial, allGroups, groupBills, currentPosition, onGroupChan
           <input
             type="text"
             inputMode="decimal"
-            value={form.defaultAmount}
-            onChange={(e) => set({ defaultAmount: parseFloat(e.target.value) || 0 })}
+            value={amountStr}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (/^-?\d*\.?\d*$/.test(v)) {
+                setAmountStr(v);
+                set({ defaultAmount: parseFloat(v) || 0 });
+              }
+            }}
             className="w-full bg-gray-800 border border-gray-700 rounded pl-5 pr-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
           />
         </div>

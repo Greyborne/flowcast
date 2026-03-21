@@ -116,6 +116,12 @@ export async function unreconcileIncome(incomeEntryId: string): Promise<void> {
     data: { isReconciled: false, actualAmount: null, reconciledAt: null },
   });
 
+  // Unmatch any transaction that was linked to this income entry
+  await prisma.transaction.updateMany({
+    where: { incomeEntryId },
+    data: { status: 'UNMATCHED', incomeEntryId: null },
+  });
+
   await prisma.reconciliationLog.create({
     data: {
       resourceType: 'income',
@@ -202,6 +208,12 @@ export async function unreconcileBill(billInstanceId: string): Promise<void> {
   await prisma.billInstance.update({
     where: { id: billInstanceId },
     data: { isReconciled: false, isFrozen: false, actualAmount: null, reconciledAt: null },
+  });
+
+  // Unmatch any transaction that was linked to this bill instance
+  await prisma.transaction.updateMany({
+    where: { billInstanceId },
+    data: { status: 'UNMATCHED', billInstanceId: null },
   });
 
   await prisma.reconciliationLog.create({

@@ -21,6 +21,7 @@ model PayPeriod {
   paydayDate     DateTime
   openingBalance Float    @default(0)
   isGenerated    Boolean  @default(true)
+  isClosed       Boolean  @default(false)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

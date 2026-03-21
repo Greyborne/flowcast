@@ -35,13 +35,13 @@ const OPTIONS: Option[] = [
   },
   {
     id: 'templates',
-    label: 'Delete all bill templates',
-    description: 'Permanently removes every bill template and all associated bill instances.',
+    label: 'Delete all expenses',
+    description: 'Permanently removes every expense template and all associated instances.',
     severity: 'high',
   },
   {
     id: 'sources',
-    label: 'Delete all income sources',
+    label: 'Delete all income',
     description: 'Permanently removes every income source and all associated income entries.',
     severity: 'high',
   },
@@ -138,7 +138,7 @@ function RegenerateModal({ onClose, onDone }: { onClose: () => void; onDone: (ms
         <div>
           <h3 className="text-lg font-bold text-white">Regenerate Pay Schedule</h3>
           <p className="text-xs text-gray-500 mt-1">
-            Review and adjust your schedule settings. Your bill templates and income sources
+            Review and adjust your schedule settings. Your expenses and income
             will be used to populate the new periods.
           </p>
         </div>
@@ -267,8 +267,8 @@ export default function DataManagementTab() {
       if (data.summary.instancesDeleted)   parts.push(`${data.summary.instancesDeleted} bill instances deleted`);
       if (data.summary.entriesDeleted)     parts.push(`${data.summary.entriesDeleted} income entries deleted`);
       if (data.summary.snapshotsDeleted)   parts.push(`${data.summary.snapshotsDeleted} snapshots cleared`);
-      if (data.summary.templatesDeleted)   parts.push(`${data.summary.templatesDeleted} bill templates deleted`);
-      if (data.summary.sourcesDeleted)     parts.push(`${data.summary.sourcesDeleted} income sources deleted`);
+      if (data.summary.templatesDeleted)   parts.push(`${data.summary.templatesDeleted} expenses deleted`);
+      if (data.summary.sourcesDeleted)     parts.push(`${data.summary.sourcesDeleted} income deleted`);
       if (data.summary.periodsDeleted)     parts.push(`${data.summary.periodsDeleted} pay periods deleted`);
       setResult(parts.length ? parts.join(', ') + '.' : 'Done — nothing to clear.');
       setClearedPeriods(includedPeriods);
