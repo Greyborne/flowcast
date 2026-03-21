@@ -538,6 +538,19 @@ router.delete('/batches/:id', async (req: Request, res: Response) => {
 
 // ── Auto Match Rules ──────────────────────────────────────────────────────────
 
+/** Return whichever of two instances/entries is closest in paydayDate to txnDate (null-safe). */
+function pickClosest<T extends { payPeriod?: { paydayDate: Date } }>(
+  txnDate: Date,
+  before: T | null,
+  after: T | null,
+): T | null {
+  if (!before) return after;
+  if (!after) return before;
+  const distBefore = Math.abs(txnDate.getTime() - (before as any).payPeriod.paydayDate.getTime());
+  const distAfter  = Math.abs(txnDate.getTime() - (after  as any).payPeriod.paydayDate.getTime());
+  return distBefore <= distAfter ? before : after;
+}
+
 // POST /api/transactions/rules/apply — run rules engine against all UNMATCHED transactions
 router.post('/rules/apply', async (_req: Request, res: Response) => {
   try {
@@ -552,20 +565,43 @@ router.post('/rules/apply', async (_req: Request, res: Response) => {
       const match = await findAutoMatch(txn.description);
       if (!match) continue;
 
+      // No date window — the rule already identifies the target. Find the nearest
+      // unreconciled instance; if none exists (discretionary bill), create one.
       if (match.targetType === 'BILL') {
-        const inst = await prisma.billInstance.findFirst({
-          where: {
-            billTemplateId: match.targetId,
-            isReconciled: false,
-            payPeriod: {
-              paydayDate: {
-                gte: new Date(txn.date.getTime() - 14 * 86400000),
-                lte: new Date(txn.date.getTime() + 14 * 86400000),
-              },
-            },
-          },
-          orderBy: { payPeriod: { paydayDate: 'asc' } },
-        });
+        const [before, after] = await Promise.all([
+          prisma.billInstance.findFirst({
+            where: { billTemplateId: match.targetId, isReconciled: false, payPeriod: { paydayDate: { lte: txn.date } } },
+            orderBy: { payPeriod: { paydayDate: 'desc' } },
+            include: { payPeriod: true },
+          }),
+          prisma.billInstance.findFirst({
+            where: { billTemplateId: match.targetId, isReconciled: false, payPeriod: { paydayDate: { gt: txn.date } } },
+            orderBy: { payPeriod: { paydayDate: 'asc' } },
+            include: { payPeriod: true },
+          }),
+        ]);
+
+        let inst = pickClosest(txn.date, before, after);
+
+        if (!inst) {
+          // Discretionary bill — no instances exist; create one in the period containing the transaction
+          const template = await prisma.billTemplate.findUnique({ where: { id: match.targetId } });
+          const period = await prisma.payPeriod.findFirst({
+            where: { startDate: { lte: txn.date }, endDate: { gte: txn.date } },
+          }) ?? await prisma.payPeriod.findFirst({
+            where: { paydayDate: { gte: txn.date } }, orderBy: { paydayDate: 'asc' },
+          }) ?? await prisma.payPeriod.findFirst({ orderBy: { paydayDate: 'desc' } });
+
+          if (template && period) {
+            inst = await prisma.billInstance.upsert({
+              where: { payPeriodId_billTemplateId: { payPeriodId: period.id, billTemplateId: template.id } },
+              create: { payPeriodId: period.id, billTemplateId: template.id, projectedAmount: template.defaultAmount, isReconciled: false, isFrozen: false },
+              update: {},
+              include: { payPeriod: true },
+            });
+          }
+        }
+
         if (inst) {
           await prisma.transaction.update({
             where: { id: txn.id },
@@ -579,19 +615,19 @@ router.post('/rules/apply', async (_req: Request, res: Response) => {
           matchedCount++;
         }
       } else {
-        const entry = await prisma.incomeEntry.findFirst({
-          where: {
-            incomeSourceId: match.targetId,
-            isReconciled: false,
-            payPeriod: {
-              paydayDate: {
-                gte: new Date(txn.date.getTime() - 14 * 86400000),
-                lte: new Date(txn.date.getTime() + 14 * 86400000),
-              },
-            },
-          },
-          orderBy: { payPeriod: { paydayDate: 'asc' } },
-        });
+        const [before, after] = await Promise.all([
+          prisma.incomeEntry.findFirst({
+            where: { incomeSourceId: match.targetId, isReconciled: false, payPeriod: { paydayDate: { lte: txn.date } } },
+            orderBy: { payPeriod: { paydayDate: 'desc' } },
+            include: { payPeriod: true },
+          }),
+          prisma.incomeEntry.findFirst({
+            where: { incomeSourceId: match.targetId, isReconciled: false, payPeriod: { paydayDate: { gt: txn.date } } },
+            orderBy: { payPeriod: { paydayDate: 'asc' } },
+            include: { payPeriod: true },
+          }),
+        ]);
+        const entry = pickClosest(txn.date, before, after);
         if (entry) {
           await prisma.transaction.update({
             where: { id: txn.id },
