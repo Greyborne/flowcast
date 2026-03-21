@@ -17,7 +17,7 @@ import {
 } from '../hooks/useTransactions';
 import { useBillTemplates } from '../hooks/useTemplates';
 import { useIncomeSources } from '../hooks/useTemplates';
-import type { Transaction, AutoMatchRule } from '../types';
+import type { Transaction, AutoMatchRule, MatchCandidate } from '../types';
 
 type Tab = 'inbox' | 'all' | 'history' | 'rules';
 type SortCol = 'date' | 'description' | 'amount' | 'status';
@@ -98,6 +98,10 @@ function MatchPicker({
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Step 2: pending rule proposal after candidate selected
+  const [pendingCandidate, setPendingCandidate] = useState<MatchCandidate | null>(null);
+  const [ruleForm, setRuleForm] = useState<RuleForm>(emptyRuleForm);
+
   function handleSearchChange(val: string) {
     setSearch(val);
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -106,7 +110,21 @@ function MatchPicker({
 
   const { data: candidates = [], isLoading } = useMatchCandidates(transaction.id, debouncedSearch || undefined);
 
-  async function handleMatch(c: typeof candidates[0]) {
+  function selectCandidate(c: MatchCandidate) {
+    setPendingCandidate(c);
+    setRuleForm({
+      pattern: transaction.description,
+      matchType: 'CONTAINS',
+      targetType: c.type,
+      targetId: c.templateId,
+      priority: 0,
+    });
+  }
+
+  async function confirmMatch(createRuleFlag: boolean) {
+    if (!pendingCandidate) return;
+    const c = pendingCandidate;
+
     if (c.kind === 'TEMPLATE') {
       await matchMutation.mutateAsync({ id: transaction.id, billTemplateId: c.id });
     } else if (c.type === 'BILL') {
@@ -115,69 +133,163 @@ function MatchPicker({
       await matchMutation.mutateAsync({ id: transaction.id, incomeEntryId: c.id });
     }
 
-    // Auto-create a CONTAINS rule so future imports match automatically
-    try {
-      await createRule.mutateAsync({
-        pattern: transaction.description,
-        matchType: 'CONTAINS',
-        targetType: c.type,
-        targetId: c.templateId,
-        priority: 0,
-      });
-      onRuleCreated?.(transaction.description, c.name);
-    } catch {
-      // Rule may already exist — ignore silently
+    if (createRuleFlag) {
+      try {
+        await createRule.mutateAsync(ruleForm);
+        onRuleCreated?.(ruleForm.pattern, c.name);
+      } catch {
+        // Rule may already exist — ignore silently
+      }
     }
 
     onClose();
   }
 
+  const { data: billTemplates = [] } = useBillTemplates();
+  const { data: incomeSources = [] } = useIncomeSources();
+
+  const isBusy = matchMutation.isPending || createRule.isPending;
+
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+
+        {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
           <div className="flex items-center gap-3 min-w-0">
+            {pendingCandidate && (
+              <button onClick={() => setPendingCandidate(null)} className="text-gray-500 hover:text-white text-lg leading-none shrink-0">‹</button>
+            )}
             <span className="text-sm font-semibold text-white truncate">{transaction.description}</span>
             <span className="text-sm font-mono text-gray-300 shrink-0">{fmt.format(Math.abs(transaction.amount))}</span>
           </div>
           <button onClick={onClose} className="ml-3 text-gray-500 hover:text-white shrink-0">✕</button>
         </div>
-        <div className="px-3 py-2 border-b border-gray-800">
-          <input
-            autoFocus
-            type="text"
-            value={search}
-            onChange={(e) => handleSearchChange(e.target.value)}
-            placeholder="Search expenses & income…"
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500"
-          />
-        </div>
-        <div className="overflow-y-auto" style={{ maxHeight: '300px' }}>
-          {isLoading && <p className="text-xs text-gray-500 text-center py-6">Searching…</p>}
-          {!isLoading && candidates.length === 0 && !debouncedSearch && (
-            <p className="text-xs text-gray-500 text-center py-6">No unreconciled items within ±14 days — type to search all</p>
-          )}
-          {!isLoading && candidates.length === 0 && debouncedSearch && (
-            <p className="text-xs text-gray-500 text-center py-6">No matches for "{debouncedSearch}"</p>
-          )}
-          {!isLoading && candidates.map((c) => (
-            <button
-              key={`${c.kind}-${c.id}`}
-              onClick={() => handleMatch(c)}
-              disabled={matchMutation.isPending}
-              className="w-full flex items-center gap-3 px-4 py-2.5 border-b border-gray-800 last:border-0 hover:bg-gray-800 text-left transition-colors disabled:opacity-50"
-            >
-              <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${c.type === 'BILL' ? 'bg-red-900/50 text-red-300' : 'bg-green-900/50 text-green-300'}`}>
-                {c.type === 'BILL' ? 'EXP' : 'INC'}
+
+        {/* Step 1 — pick a candidate */}
+        {!pendingCandidate && (
+          <>
+            <div className="px-3 py-2 border-b border-gray-800">
+              <input
+                autoFocus
+                type="text"
+                value={search}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                placeholder="Search expenses & income…"
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+            <div className="overflow-y-auto" style={{ maxHeight: '300px' }}>
+              {isLoading && <p className="text-xs text-gray-500 text-center py-6">Searching…</p>}
+              {!isLoading && candidates.length === 0 && !debouncedSearch && (
+                <p className="text-xs text-gray-500 text-center py-6">No unreconciled items within ±14 days — type to search all</p>
+              )}
+              {!isLoading && candidates.length === 0 && debouncedSearch && (
+                <p className="text-xs text-gray-500 text-center py-6">No matches for "{debouncedSearch}"</p>
+              )}
+              {!isLoading && candidates.map((c) => (
+                <button
+                  key={`${c.kind}-${c.id}`}
+                  onClick={() => selectCandidate(c)}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 border-b border-gray-800 last:border-0 hover:bg-gray-800 text-left transition-colors"
+                >
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${c.type === 'BILL' ? 'bg-red-900/50 text-red-300' : 'bg-green-900/50 text-green-300'}`}>
+                    {c.type === 'BILL' ? 'EXP' : 'INC'}
+                  </span>
+                  <span className="flex-1 text-sm text-gray-200 truncate">{c.name}</span>
+                  <span className="text-sm font-mono text-gray-300 shrink-0">{fmt.format(c.projectedAmount)}</span>
+                  <span className="text-xs text-gray-500 shrink-0 w-20 text-right">
+                    {c.paydayDate ? fmtDate(c.paydayDate) : <span className="italic text-gray-600">discretionary</span>}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Step 2 — confirm match + optionally edit/skip rule */}
+        {pendingCandidate && (
+          <div className="p-4 space-y-4">
+            {/* Proposed match summary */}
+            <div className="flex items-center gap-2 bg-gray-800/60 rounded-lg px-3 py-2">
+              <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${pendingCandidate.type === 'BILL' ? 'bg-red-900/50 text-red-300' : 'bg-green-900/50 text-green-300'}`}>
+                {pendingCandidate.type === 'BILL' ? 'EXP' : 'INC'}
               </span>
-              <span className="flex-1 text-sm text-gray-200 truncate">{c.name}</span>
-              <span className="text-sm font-mono text-gray-300 shrink-0">{fmt.format(c.projectedAmount)}</span>
-              <span className="text-xs text-gray-500 shrink-0 w-20 text-right">
-                {c.paydayDate ? fmtDate(c.paydayDate) : <span className="italic text-gray-600">discretionary</span>}
-              </span>
-            </button>
-          ))}
-        </div>
+              <span className="flex-1 text-sm text-gray-200">{pendingCandidate.name}</span>
+              <span className="text-sm font-mono text-gray-300">{fmt.format(pendingCandidate.projectedAmount)}</span>
+            </div>
+
+            {/* Rule proposal */}
+            <div className="border border-gray-700 rounded-xl p-3 space-y-3">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Auto-match rule</p>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="col-span-2">
+                  <label className="block text-xs text-gray-500 mb-1">Pattern</label>
+                  <input
+                    type="text"
+                    value={ruleForm.pattern}
+                    onChange={(e) => setRuleForm((f) => ({ ...f, pattern: e.target.value }))}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Match Type</label>
+                  <select
+                    value={ruleForm.matchType}
+                    onChange={(e) => setRuleForm((f) => ({ ...f, matchType: e.target.value as RuleForm['matchType'] }))}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-white"
+                  >
+                    <option value="CONTAINS">Contains</option>
+                    <option value="STARTS_WITH">Starts With</option>
+                    <option value="REGEX">Regex</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Target</label>
+                  <select
+                    value={ruleForm.targetId}
+                    onChange={(e) => setRuleForm((f) => ({ ...f, targetId: e.target.value }))}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-white"
+                  >
+                    {(ruleForm.targetType === 'BILL' ? billTemplates : incomeSources).map((o) => (
+                      <option key={o.id} value={o.id}>{o.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Priority</label>
+                  <input
+                    type="number"
+                    value={ruleForm.priority}
+                    onChange={(e) => setRuleForm((f) => ({ ...f, priority: parseInt(e.target.value) || 0 }))}
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => confirmMatch(false)}
+                disabled={isBusy}
+                className="flex-1 px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm disabled:opacity-50"
+              >
+                Match, no rule
+              </button>
+              <button
+                type="button"
+                onClick={() => confirmMatch(true)}
+                disabled={isBusy || !ruleForm.pattern || !ruleForm.targetId}
+                className="flex-1 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium disabled:opacity-50"
+              >
+                {isBusy ? 'Saving…' : 'Match & Create Rule'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
