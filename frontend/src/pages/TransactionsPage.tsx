@@ -422,21 +422,20 @@ function TransactionList({
   onMatch,
   emptyMessage = 'No transactions found',
   extraControls,
+  sortCol,
+  sortDir,
+  onSort,
 }: {
   transactions: Transaction[];
   isLoading: boolean;
   onMatch: (txn: Transaction) => void;
   emptyMessage?: React.ReactNode;
   extraControls?: React.ReactNode;
+  sortCol: SortCol;
+  sortDir: SortDir;
+  onSort: (col: SortCol) => void;
 }) {
   const [search, setSearch] = useState('');
-  const [sortCol, setSortCol] = useState<SortCol>('date');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
-
-  function handleSort(col: SortCol) {
-    if (col === sortCol) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    else { setSortCol(col); setSortDir('asc'); }
-  }
 
   const visible = useMemo(
     () => filterAndSort(transactions, search, sortCol, sortDir),
@@ -462,11 +461,11 @@ function TransactionList({
 
       {/* Column headers */}
       <div className="flex items-center gap-3 px-0 pb-1.5 border-b border-gray-700 mb-1">
-        <SortTh label="Date"        col="date"        active={sortCol} dir={sortDir} onSort={handleSort} className="w-24 shrink-0" />
-        <SortTh label="Description" col="description" active={sortCol} dir={sortDir} onSort={handleSort} className="flex-1" />
+        <SortTh label="Date"        col="date"        active={sortCol} dir={sortDir} onSort={onSort} className="w-24 shrink-0" />
+        <SortTh label="Description" col="description" active={sortCol} dir={sortDir} onSort={onSort} className="flex-1" />
         <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 shrink-0">Source</span>
-        <SortTh label="Amount"      col="amount"      active={sortCol} dir={sortDir} onSort={handleSort} className="w-24 shrink-0 justify-end" />
-        <SortTh label="Status"      col="status"      active={sortCol} dir={sortDir} onSort={handleSort} className="w-28 shrink-0 justify-end" />
+        <SortTh label="Amount"      col="amount"      active={sortCol} dir={sortDir} onSort={onSort} className="w-24 shrink-0 justify-end" />
+        <SortTh label="Status"      col="status"      active={sortCol} dir={sortDir} onSort={onSort} className="w-28 shrink-0 justify-end" />
       </div>
 
       {isLoading && <p className="text-sm text-gray-500 text-center py-8">Loading…</p>}
@@ -493,7 +492,12 @@ function TransactionList({
 
 // ── Inbox Tab ─────────────────────────────────────────────────────────────────
 
-function InboxTab({ onMatch }: { onMatch: (txn: Transaction) => void }) {
+function InboxTab({
+  onMatch, sortCol, sortDir, onSort,
+}: {
+  onMatch: (txn: Transaction) => void;
+  sortCol: SortCol; sortDir: SortDir; onSort: (col: SortCol) => void;
+}) {
   const { data, isLoading } = useTransactions({ status: 'UNMATCHED', limit: 500 });
   const transactions = data?.transactions ?? [];
 
@@ -502,6 +506,9 @@ function InboxTab({ onMatch }: { onMatch: (txn: Transaction) => void }) {
       transactions={transactions}
       isLoading={isLoading}
       onMatch={onMatch}
+      sortCol={sortCol}
+      sortDir={sortDir}
+      onSort={onSort}
       emptyMessage={
         <div>
           <p className="text-4xl mb-3">✓</p>
@@ -514,7 +521,12 @@ function InboxTab({ onMatch }: { onMatch: (txn: Transaction) => void }) {
 
 // ── All Transactions Tab ──────────────────────────────────────────────────────
 
-function AllTab({ onMatch }: { onMatch: (txn: Transaction) => void }) {
+function AllTab({
+  onMatch, sortCol, sortDir, onSort,
+}: {
+  onMatch: (txn: Transaction) => void;
+  sortCol: SortCol; sortDir: SortDir; onSort: (col: SortCol) => void;
+}) {
   const [statusFilter, setStatusFilter] = useState('');
   const { data, isLoading } = useTransactions({ status: statusFilter || undefined, limit: 1000 });
   const transactions = data?.transactions ?? [];
@@ -540,6 +552,9 @@ function AllTab({ onMatch }: { onMatch: (txn: Transaction) => void }) {
       transactions={transactions}
       isLoading={isLoading}
       onMatch={onMatch}
+      sortCol={sortCol}
+      sortDir={sortDir}
+      onSort={onSort}
       extraControls={statusPills}
     />
   );
@@ -805,6 +820,13 @@ export default function TransactionsPage() {
   const [tab, setTab] = useState<Tab>('inbox');
   const [matchTarget, setMatchTarget] = useState<Transaction | null>(null);
   const [showManual, setShowManual] = useState(false);
+  const [sortCol, setSortCol] = useState<SortCol>('date');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+
+  function handleSort(col: SortCol) {
+    if (col === sortCol) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortCol(col); setSortDir('asc'); }
+  }
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number; matched: number; format: string } | null>(null);
   const [ruleCreated, setRuleCreated] = useState<{ pattern: string; targetName: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -890,8 +912,8 @@ export default function TransactionsPage() {
           ))}
         </div>
         <div className="p-4">
-          {tab === 'inbox'   && <InboxTab onMatch={setMatchTarget} />}
-          {tab === 'all'     && <AllTab onMatch={setMatchTarget} />}
+          {tab === 'inbox'   && <InboxTab onMatch={setMatchTarget} sortCol={sortCol} sortDir={sortDir} onSort={handleSort} />}
+          {tab === 'all'     && <AllTab   onMatch={setMatchTarget} sortCol={sortCol} sortDir={sortDir} onSort={handleSort} />}
           {tab === 'history' && <HistoryTab />}
           {tab === 'rules'   && <RulesTab />}
         </div>
