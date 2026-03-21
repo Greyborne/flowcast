@@ -13,6 +13,7 @@ import {
   useCreateAutoMatchRule,
   useUpdateAutoMatchRule,
   useDeleteAutoMatchRule,
+  useApplyAutoMatchRules,
   useCreateManualTransaction,
 } from '../hooks/useTransactions';
 import { useBillTemplates } from '../hooks/useTemplates';
@@ -94,6 +95,7 @@ function MatchPicker({
 }) {
   const matchMutation = useMatchTransaction();
   const createRule = useCreateAutoMatchRule();
+  const applyRules = useApplyAutoMatchRules();
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -137,6 +139,7 @@ function MatchPicker({
       try {
         await createRule.mutateAsync(ruleForm);
         onRuleCreated?.(ruleForm.pattern, c.name);
+        applyRules.mutate(); // run rules against remaining unmatched transactions
       } catch {
         // Rule may already exist — ignore silently
       }
@@ -649,11 +652,13 @@ function RulesTab() {
   const createRule = useCreateAutoMatchRule();
   const updateRule = useUpdateAutoMatchRule();
   const deleteRule = useDeleteAutoMatchRule();
+  const applyRules = useApplyAutoMatchRules();
 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<RuleForm>(emptyRuleForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<RuleForm>(emptyRuleForm);
+  const [applyResult, setApplyResult] = useState<{ total: number; matched: number } | null>(null);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -661,6 +666,13 @@ function RulesTab() {
     await createRule.mutateAsync(form);
     setForm(emptyRuleForm);
     setShowForm(false);
+    const result = await applyRules.mutateAsync();
+    setApplyResult(result);
+  }
+
+  async function handleRunRules() {
+    const result = await applyRules.mutateAsync();
+    setApplyResult(result);
   }
 
   function startEdit(rule: AutoMatchRule) {
@@ -687,11 +699,30 @@ function RulesTab() {
         <p className="text-sm text-gray-400">
           Rules are applied on import to automatically match transactions. Higher priority = evaluated first.
         </p>
-        <button onClick={() => { setShowForm((v) => !v); setEditingId(null); }}
-          className="text-xs px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 text-white">
-          + Add Rule
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleRunRules}
+            disabled={applyRules.isPending}
+            className="text-xs px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 disabled:opacity-50"
+          >
+            {applyRules.isPending ? 'Running…' : '▶ Run Rules'}
+          </button>
+          <button onClick={() => { setShowForm((v) => !v); setEditingId(null); }}
+            className="text-xs px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 text-white">
+            + Add Rule
+          </button>
+        </div>
       </div>
+
+      {applyResult && (
+        <div className="flex items-center justify-between bg-green-900/30 border border-green-700/50 rounded-lg px-4 py-2">
+          <p className="text-sm text-green-300">
+            Ran rules against {applyResult.total} unmatched transaction{applyResult.total !== 1 ? 's' : ''} —{' '}
+            <span className="font-semibold">{applyResult.matched} matched</span>
+          </p>
+          <button onClick={() => setApplyResult(null)} className="text-green-600 hover:text-green-400 text-xs">✕</button>
+        </div>
+      )}
 
       {showForm && (
         <form onSubmit={handleCreate} className="bg-gray-800/50 border border-gray-700 rounded-xl p-4 space-y-3">

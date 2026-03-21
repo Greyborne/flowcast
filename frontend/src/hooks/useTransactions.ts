@@ -195,3 +195,17 @@ export function useDeleteAutoMatchRule() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['autoMatchRules'] }),
   });
 }
+
+export function useApplyAutoMatchRules() {
+  const qc = useQueryClient();
+  return useMutation<{ total: number; matched: number }, Error>({
+    mutationFn: async () => {
+      const { data } = await axios.post(`${API}/api/transactions/rules/apply`);
+      return data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['transactions'] });
+      qc.invalidateQueries({ queryKey: ['importBatches'] });
+    },
+  });
+}

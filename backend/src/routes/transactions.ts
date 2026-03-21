@@ -538,6 +538,93 @@ router.delete('/batches/:id', async (req: Request, res: Response) => {
 
 // ── Auto Match Rules ──────────────────────────────────────────────────────────
 
+// POST /api/transactions/rules/apply — run rules engine against all UNMATCHED transactions
+router.post('/rules/apply', async (_req: Request, res: Response) => {
+  try {
+    const unmatched = await prisma.transaction.findMany({
+      where: { status: 'UNMATCHED' },
+    });
+
+    let matchedCount = 0;
+    const affectedPeriodIds = new Set<string>();
+
+    for (const txn of unmatched) {
+      const match = await findAutoMatch(txn.description);
+      if (!match) continue;
+
+      if (match.targetType === 'BILL') {
+        const inst = await prisma.billInstance.findFirst({
+          where: {
+            billTemplateId: match.targetId,
+            isReconciled: false,
+            payPeriod: {
+              paydayDate: {
+                gte: new Date(txn.date.getTime() - 14 * 86400000),
+                lte: new Date(txn.date.getTime() + 14 * 86400000),
+              },
+            },
+          },
+          orderBy: { payPeriod: { paydayDate: 'asc' } },
+        });
+        if (inst) {
+          await prisma.transaction.update({
+            where: { id: txn.id },
+            data: { status: 'MATCHED', billInstanceId: inst.id },
+          });
+          await prisma.billInstance.update({
+            where: { id: inst.id },
+            data: { isReconciled: true, actualAmount: Math.abs(txn.amount), reconciledAt: new Date() },
+          });
+          affectedPeriodIds.add(inst.payPeriodId);
+          matchedCount++;
+        }
+      } else {
+        const entry = await prisma.incomeEntry.findFirst({
+          where: {
+            incomeSourceId: match.targetId,
+            isReconciled: false,
+            payPeriod: {
+              paydayDate: {
+                gte: new Date(txn.date.getTime() - 14 * 86400000),
+                lte: new Date(txn.date.getTime() + 14 * 86400000),
+              },
+            },
+          },
+          orderBy: { payPeriod: { paydayDate: 'asc' } },
+        });
+        if (entry) {
+          await prisma.transaction.update({
+            where: { id: txn.id },
+            data: { status: 'MATCHED', incomeEntryId: entry.id },
+          });
+          await prisma.incomeEntry.update({
+            where: { id: entry.id },
+            data: { isReconciled: true, actualAmount: Math.abs(txn.amount), reconciledAt: new Date() },
+          });
+          affectedPeriodIds.add(entry.payPeriodId);
+          matchedCount++;
+        }
+      }
+    }
+
+    if (affectedPeriodIds.size > 0) {
+      const sorted = await prisma.payPeriod.findMany({
+        where: { id: { in: [...affectedPeriodIds] } },
+        orderBy: { paydayDate: 'asc' },
+        select: { id: true },
+      });
+      if (sorted.length > 0) {
+        const affected = await recomputeFromPeriod(sorted[0].id);
+        broadcast({ type: 'BALANCE_UPDATE', payPeriodIds: affected });
+      }
+    }
+
+    res.json({ total: unmatched.length, matched: matchedCount });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/transactions/rules
 router.get('/rules', async (_req: Request, res: Response) => {
   try {
