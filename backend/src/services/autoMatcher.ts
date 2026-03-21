@@ -26,6 +26,35 @@ export interface MatchCandidate {
   type: 'BILL' | 'INCOME';
 }
 
+/**
+ * For search-mode results, filter instances per template:
+ * - If any past (paydayDate <= today) unreconciled instances exist → keep only those.
+ * - Otherwise → keep only the single next upcoming instance.
+ */
+function filterByRecency<T extends { templateId: string; paydayDate: Date | null }>(instances: T[]): T[] {
+  const now = new Date();
+  const byTemplate = new Map<string, T[]>();
+  for (const inst of instances) {
+    const list = byTemplate.get(inst.templateId) ?? [];
+    list.push(inst);
+    byTemplate.set(inst.templateId, list);
+  }
+
+  const result: T[] = [];
+  for (const list of byTemplate.values()) {
+    const past = list.filter((i) => i.paydayDate && i.paydayDate <= now);
+    if (past.length > 0) {
+      result.push(...past);
+    } else {
+      // No past instances — take only the earliest future one
+      const future = list.filter((i) => i.paydayDate && i.paydayDate > now);
+      future.sort((a, b) => a.paydayDate!.getTime() - b.paydayDate!.getTime());
+      if (future.length > 0) result.push(future[0]);
+    }
+  }
+  return result;
+}
+
 function testRule(description: string, pattern: string, matchType: string): boolean {
   const haystack = description.toLowerCase();
   const needle = pattern.toLowerCase();
@@ -113,17 +142,20 @@ export async function findMatchCandidates(
         },
       });
 
-      for (const inst of instances) {
-        candidates.push({
-          kind: 'INSTANCE',
-          id: inst.id,
-          templateId: inst.billTemplateId,
-          payPeriodId: inst.payPeriodId,
-          name: inst.billTemplate.name,
-          projectedAmount: inst.projectedAmount,
-          paydayDate: inst.payPeriod.paydayDate,
-          type: 'BILL',
-        });
+      // Map to candidate shape, then filter to past-only or next-future-only per template
+      const mapped = instances.map((inst) => ({
+        kind: 'INSTANCE' as const,
+        id: inst.id,
+        templateId: inst.billTemplateId,
+        payPeriodId: inst.payPeriodId,
+        name: inst.billTemplate.name,
+        projectedAmount: inst.projectedAmount,
+        paydayDate: inst.payPeriod.paydayDate,
+        type: 'BILL' as const,
+      }));
+
+      for (const inst of filterByRecency(mapped)) {
+        candidates.push(inst);
       }
 
       for (const tmpl of templates) {
@@ -187,17 +219,19 @@ export async function findMatchCandidates(
         orderBy: { payPeriod: { paydayDate: 'asc' } },
       });
 
-      for (const entry of entries) {
-        candidates.push({
-          kind: 'INSTANCE',
-          id: entry.id,
-          templateId: entry.incomeSourceId,
-          payPeriodId: entry.payPeriodId,
-          name: entry.incomeSource.name,
-          projectedAmount: entry.projectedAmount,
-          paydayDate: entry.payPeriod.paydayDate,
-          type: 'INCOME',
-        });
+      const mappedIncome = entries.map((entry) => ({
+        kind: 'INSTANCE' as const,
+        id: entry.id,
+        templateId: entry.incomeSourceId,
+        payPeriodId: entry.payPeriodId,
+        name: entry.incomeSource.name,
+        projectedAmount: entry.projectedAmount,
+        paydayDate: entry.payPeriod.paydayDate,
+        type: 'INCOME' as const,
+      }));
+
+      for (const entry of filterByRecency(mappedIncome)) {
+        candidates.push(entry);
       }
     } else {
       const windowMs = windowDays * 24 * 60 * 60 * 1000;
