@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSettings } from '../../hooks/useSettings';
@@ -77,6 +77,207 @@ const PROJECTION_YEAR_OPTIONS = [
   { value: '2', label: '2 Years' },
   { value: '3', label: '3 Years' },
 ];
+
+// ── Backup / Restore ──────────────────────────────────────────────────────────
+
+type RestoreMode = 'merge' | 'replace';
+
+interface BackupMeta {
+  schemaVersion: number;
+  createdAt: string;
+  counts: { billTemplates: number; incomeSources: number; autoMatchRules: number; appSettings: number };
+  data: unknown;
+}
+
+function BackupSection() {
+  const qc = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const [downloading, setDownloading] = useState(false);
+  const [pendingBackup, setPendingBackup] = useState<BackupMeta | null>(null);
+  const [restoreMode, setRestoreMode] = useState<RestoreMode>('merge');
+  const [restoring, setRestoring] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleDownload() {
+    setDownloading(true);
+    try {
+      const { data } = await axios.get(`${API}/api/backup`, { responseType: 'blob' });
+      const url = URL.createObjectURL(data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `flowcast-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setError('Download failed: ' + (err.message ?? 'unknown error'));
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target?.result as string) as BackupMeta;
+        if (!parsed.schemaVersion || !parsed.data) throw new Error('Invalid backup file');
+        setPendingBackup(parsed);
+        setResult(null);
+        setError(null);
+        setWarning(null);
+      } catch {
+        setError('Could not parse backup file — make sure it is a valid FlowCast backup.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  }
+
+  async function handleRestore() {
+    if (!pendingBackup) return;
+    setRestoring(true);
+    setError(null);
+    try {
+      const { data } = await axios.post(`${API}/api/backup/restore`, {
+        mode: restoreMode,
+        backup: pendingBackup,
+      });
+      const s = data.summary;
+      setResult(
+        `Restored: ${s.billTemplates} expenses, ${s.incomeSources} income sources, ` +
+        `${s.autoMatchRules} rules, ${s.appSettings} settings.`
+      );
+      setWarning(data.versionWarning ?? null);
+      setPendingBackup(null);
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['billTemplates'] }),
+        qc.invalidateQueries({ queryKey: ['incomeSources'] }),
+        qc.invalidateQueries({ queryKey: ['autoMatchRules'] }),
+        qc.invalidateQueries({ queryKey: ['settings'] }),
+      ]);
+    } catch (err: any) {
+      setError(err.response?.data?.error ?? err.message ?? 'Restore failed');
+    } finally {
+      setRestoring(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-white">Backup & Restore</h3>
+        <p className="text-xs text-gray-500 mt-0.5">
+          Export your expenses, income sources, auto-match rules, and settings to a JSON file.
+          Restore from a previous backup with Merge (safe, non-destructive) or Replace (wipe and reimport).
+        </p>
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          onClick={handleDownload}
+          disabled={downloading}
+          className="px-4 py-2 bg-blue-800 hover:bg-blue-700 disabled:opacity-40 text-white text-sm rounded-lg transition-colors font-medium"
+        >
+          {downloading ? 'Preparing…' : '↓ Download Backup'}
+        </button>
+        <button
+          onClick={() => fileRef.current?.click()}
+          className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm rounded-lg transition-colors border border-gray-700"
+        >
+          ↑ Load Backup File…
+        </button>
+        <input ref={fileRef} type="file" accept=".json" className="hidden" onChange={handleFileSelect} />
+      </div>
+
+      {/* Restore confirmation panel */}
+      {pendingBackup && (
+        <div className="border border-blue-800/60 bg-blue-950/20 rounded-xl p-4 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-blue-300">Backup loaded</p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Created {new Date(pendingBackup.createdAt).toLocaleString()} · schema v{pendingBackup.schemaVersion}
+              </p>
+            </div>
+            <button onClick={() => setPendingBackup(null)} className="text-gray-600 hover:text-gray-400 text-xs shrink-0">✕</button>
+          </div>
+
+          <div className="grid grid-cols-4 gap-2 text-center">
+            {Object.entries(pendingBackup.counts).map(([key, count]) => (
+              <div key={key} className="bg-gray-800/60 rounded-lg px-2 py-2">
+                <p className="text-sm font-semibold text-white">{count}</p>
+                <p className="text-[10px] text-gray-500 capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="space-y-1.5">
+            <p className="text-xs text-gray-400 font-medium">Restore mode</p>
+            <div className="flex gap-3">
+              {(['merge', 'replace'] as RestoreMode[]).map((m) => (
+                <label key={m} className={`flex-1 flex items-start gap-2 p-3 rounded-lg border cursor-pointer transition-colors ${
+                  restoreMode === m ? 'border-blue-600 bg-blue-900/20' : 'border-gray-700 bg-gray-800/30 hover:border-gray-600'
+                }`}>
+                  <input type="radio" name="restoreMode" value={m} checked={restoreMode === m}
+                    onChange={() => setRestoreMode(m)} className="mt-0.5 accent-blue-500 shrink-0" />
+                  <div>
+                    <p className="text-sm text-white font-medium capitalize">{m}</p>
+                    <p className="text-xs text-gray-500">
+                      {m === 'merge'
+                        ? 'Add missing records, update existing ones by name. Safe to run on a live database.'
+                        : 'Wipe expenses, income, and rules then reimport clean. Use after a reseed.'}
+                    </p>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {restoreMode === 'replace' && (
+            <p className="text-xs text-orange-400 bg-orange-950/30 border border-orange-800/40 rounded px-3 py-2">
+              Replace mode will delete all current expenses, income sources, and rules before restoring.
+              Pay periods and transactions are not affected.
+            </p>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={handleRestore}
+              disabled={restoring}
+              className="px-4 py-2 bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white text-sm font-semibold rounded-lg transition-colors"
+            >
+              {restoring ? 'Restoring…' : `Restore (${restoreMode})`}
+            </button>
+            <button onClick={() => setPendingBackup(null)} className="px-4 py-2 text-gray-400 hover:text-white text-sm">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {warning && (
+        <p className="text-xs text-yellow-400 bg-yellow-950/30 border border-yellow-800/40 rounded px-3 py-2">
+          ⚠ {warning}
+        </p>
+      )}
+      {result && (
+        <p className="text-xs text-green-300 bg-green-950/30 border border-green-800/40 rounded px-3 py-2">
+          ✓ {result}
+        </p>
+      )}
+      {error && (
+        <p className="text-xs text-red-400 bg-red-950/30 border border-red-800/40 rounded px-3 py-2">
+          ✕ {error}
+        </p>
+      )}
+    </div>
+  );
+}
 
 // ── Regenerate modal ──────────────────────────────────────────────────────────
 
@@ -290,9 +491,12 @@ export default function DataManagementTab() {
 
   return (
     <div className="space-y-6">
-      <p className="text-sm text-gray-400">
-        Selectively clear portions of your data. Each operation is described below — read carefully before proceeding.
-      </p>
+      <BackupSection />
+
+      <div className="border-t border-gray-800 pt-6">
+        <p className="text-sm text-gray-400 mb-4">
+          Selectively clear portions of your data. Each operation is described below — read carefully before proceeding.
+        </p>
 
       {/* ── Clear options ── */}
       <div className="space-y-2">
@@ -444,6 +648,7 @@ export default function DataManagementTab() {
           onDone={(msg) => setRegenResult(msg)}
         />
       )}
+      </div>
     </div>
   );
 }

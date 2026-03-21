@@ -16,6 +16,7 @@ import reconciliationRouter from './routes/reconciliation';
 import settingsRouter from './routes/settings';
 import adminRouter from './routes/admin';
 import transactionsRouter from './routes/transactions';
+import backupRouter from './routes/backup';
 
 const app = express();
 const httpServer = createServer(app);
@@ -37,6 +38,7 @@ app.use('/api/reconciliation', reconciliationRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/transactions', transactionsRouter);
+app.use('/api/backup', backupRouter);
 
 // ── Error Handler ────────────────────────────────────────────────────────────
 app.use(errorHandler);
