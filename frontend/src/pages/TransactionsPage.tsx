@@ -616,6 +616,162 @@ type RuleForm = {
 
 const emptyRuleForm: RuleForm = { pattern: '', matchType: 'CONTAINS', targetType: 'BILL', targetId: '', priority: 0 };
 
+// ── Regex Builder ─────────────────────────────────────────────────────────────
+
+function isValidRegex(pattern: string): boolean {
+  try { new RegExp(pattern, 'i'); return true; } catch { return false; }
+}
+
+function testRegex(pattern: string, input: string): boolean {
+  try { return new RegExp(pattern, 'i').test(input); } catch { return false; }
+}
+
+// Parse an AND-lookahead pattern back into its word list for the builder UI
+function parseAndWords(pattern: string): string[] {
+  const matches = [...pattern.matchAll(/\(\?=\.\*([^)]+)\)/g)];
+  return matches.length > 0 ? matches.map((m) => m[1]) : [];
+}
+
+function buildAndPattern(words: string[]): string {
+  return words.filter(Boolean).map((w) => `(?=.*${w})`).join('');
+}
+
+function RegexBuilder({ pattern, onChange }: { pattern: string; onChange: (p: string) => void }) {
+  const [testInput, setTestInput] = useState('');
+  const [andWords, setAndWords]   = useState<string[]>(() => {
+    const parsed = parseAndWords(pattern);
+    return parsed.length > 0 ? parsed : [''];
+  });
+  const [mode, setMode] = useState<'builder' | 'raw'>(() =>
+    parseAndWords(pattern).length > 0 ? 'builder' : 'raw'
+  );
+
+  // Sync builder → pattern
+  function updateAndWords(words: string[]) {
+    setAndWords(words);
+    const built = buildAndPattern(words);
+    if (built) onChange(built);
+  }
+
+  // When user switches to raw, keep whatever pattern is there
+  // When switching back to builder, try to parse it
+  function handleModeSwitch(next: 'builder' | 'raw') {
+    if (next === 'builder') {
+      const parsed = parseAndWords(pattern);
+      setAndWords(parsed.length > 0 ? parsed : ['']);
+    }
+    setMode(next);
+  }
+
+  const valid   = pattern === '' || isValidRegex(pattern);
+  const matched = testInput ? testRegex(pattern, testInput) : null;
+
+  const TEMPLATES = [
+    { label: 'Starts with',  fn: (p: string) => `^${p}`,          placeholder: 'WALMART' },
+    { label: 'Ends with',    fn: (p: string) => `${p}$`,           placeholder: 'PAYMENT' },
+    { label: 'Whole word',   fn: (p: string) => `\\b${p}\\b`,      placeholder: 'AMAZON' },
+    { label: 'Either word',  fn: (p: string) => p.split(' ').filter(Boolean).join('|'), placeholder: 'VISA MASTERCARD' },
+  ];
+
+  return (
+    <div className="col-span-2 bg-gray-900/60 border border-blue-900/40 rounded-xl p-3 space-y-3">
+      {/* Mode toggle */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-blue-300">Regex Builder</span>
+        <div className="flex rounded-lg overflow-hidden border border-gray-700 text-xs">
+          {(['builder', 'raw'] as const).map((m) => (
+            <button key={m} type="button" onClick={() => handleModeSwitch(m)}
+              className={`px-3 py-1 capitalize transition-colors ${mode === m ? 'bg-blue-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
+              {m === 'builder' ? '🔧 Builder' : '✏️ Raw'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {mode === 'builder' ? (
+        <div className="space-y-2">
+          {/* AND words list */}
+          <div className="space-y-1.5">
+            <p className="text-[11px] text-gray-400 font-medium">All of these words must appear (AND logic):</p>
+            {andWords.map((word, i) => (
+              <div key={i} className="flex gap-2 items-center">
+                <span className="text-[10px] text-gray-600 w-6 text-right shrink-0">{i === 0 ? '' : '+'}</span>
+                <input
+                  type="text"
+                  value={word}
+                  onChange={(e) => {
+                    const next = [...andWords];
+                    next[i] = e.target.value;
+                    updateAndWords(next);
+                  }}
+                  placeholder={i === 0 ? 'e.g. GENESIS' : 'e.g. MEMBERSHIP'}
+                  className="flex-1 bg-gray-800 border border-gray-700 focus:border-blue-500 rounded-lg px-3 py-1.5 text-sm text-white font-mono focus:outline-none"
+                />
+                {andWords.length > 1 && (
+                  <button type="button" onClick={() => updateAndWords(andWords.filter((_, j) => j !== i))}
+                    className="text-gray-600 hover:text-red-400 text-xs px-1">✕</button>
+                )}
+              </div>
+            ))}
+            <button type="button" onClick={() => updateAndWords([...andWords, ''])}
+              className="text-xs text-blue-400 hover:text-blue-300 ml-8">+ add word</button>
+          </div>
+
+          {/* Quick templates */}
+          <div className="border-t border-gray-800 pt-2">
+            <p className="text-[11px] text-gray-500 mb-1.5">Or use a template (switches to raw):</p>
+            <div className="flex flex-wrap gap-1.5">
+              {TEMPLATES.map((t) => (
+                <button key={t.label} type="button"
+                  onClick={() => {
+                    const val = prompt(`${t.label} — enter text (e.g. "${t.placeholder}"):`);
+                    if (val) { onChange(t.fn(val.trim())); handleModeSwitch('raw'); }
+                  }}
+                  className="text-[11px] px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-300 hover:border-blue-500 hover:text-white transition-colors">
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* Raw mode — just show the pattern field with validation */
+        <div className="space-y-1">
+          <p className="text-[11px] text-gray-400">Edit the regex directly. Case-insensitive flag (i) is applied automatically.</p>
+          {!valid && pattern && (
+            <p className="text-[11px] text-red-400">⚠ Invalid regex — fix before saving</p>
+          )}
+        </div>
+      )}
+
+      {/* Generated pattern preview */}
+      {pattern && (
+        <div className="flex items-center gap-2 bg-gray-800/60 rounded-lg px-3 py-1.5">
+          <span className="text-[10px] text-gray-500 shrink-0">Pattern:</span>
+          <code className={`text-xs flex-1 font-mono truncate ${valid ? 'text-green-300' : 'text-red-400'}`}>{pattern}</code>
+          {!valid && <span className="text-[10px] text-red-400 shrink-0">invalid</span>}
+        </div>
+      )}
+
+      {/* Live test input */}
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={testInput}
+          onChange={(e) => setTestInput(e.target.value)}
+          placeholder="Paste a transaction description to test…"
+          className="flex-1 bg-gray-800 border border-gray-700 focus:border-blue-500 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none"
+        />
+        {testInput && matched !== null && (
+          <span className={`text-xs font-semibold shrink-0 px-2 py-1 rounded ${matched ? 'text-green-300 bg-green-950/50' : 'text-red-400 bg-red-950/50'}`}>
+            {matched ? '✓ match' : '✗ no match'}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function RuleFormFields({
   form, onChange, billTemplates, incomeSources,
 }: {
@@ -633,7 +789,8 @@ function RuleFormFields({
       <div>
         <label className="block text-xs text-gray-400 mb-1">Pattern</label>
         <input type="text" value={form.pattern} onChange={(e) => onChange({ ...form, pattern: e.target.value })}
-          placeholder="WALMART" className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white" required />
+          placeholder={form.matchType === 'REGEX' ? '(?=.*word1)(?=.*word2)' : 'WALMART'}
+          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono" required />
       </div>
       <div>
         <label className="block text-xs text-gray-400 mb-1">Match Type</label>
@@ -644,6 +801,12 @@ function RuleFormFields({
           <option value="REGEX">Regex</option>
         </select>
       </div>
+
+      {/* Regex builder — spans full width when visible */}
+      {form.matchType === 'REGEX' && (
+        <RegexBuilder pattern={form.pattern} onChange={(p) => onChange({ ...form, pattern: p })} />
+      )}
+
       <div>
         <label className="block text-xs text-gray-400 mb-1">Target Type</label>
         <select value={form.targetType} onChange={(e) => onChange({ ...form, targetType: e.target.value as AutoMatchRule['targetType'], targetId: '' })}
