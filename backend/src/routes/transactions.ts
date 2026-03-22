@@ -575,11 +575,50 @@ function pickClosest<T extends { payPeriod?: { paydayDate: Date } }>(
   return distBefore <= distAfter ? before : after;
 }
 
-// POST /api/transactions/rules/apply — run rules engine against all UNMATCHED transactions
-router.post('/rules/apply', async (_req: Request, res: Response) => {
+// POST /api/transactions/rules/apply — run rules engine against transactions
+// Body (all optional):
+//   from, to: ISO date strings — restrict to transactions in this date range
+//   force: boolean — if true, unmatch already-matched transactions first, then re-run rules
+router.post('/rules/apply', async (req: Request, res: Response) => {
   try {
+    const { from, to, force = false } = req.body as { from?: string; to?: string; force?: boolean };
+
+    const dateFilter = (from || to) ? {
+      date: {
+        ...(from ? { gte: new Date(from) } : {}),
+        ...(to   ? { lte: new Date(to + 'T23:59:59.999Z') } : {}),
+      },
+    } : {};
+
+    // If force, unmatch all currently-matched transactions in the range first
+    if (force) {
+      const matched = await prisma.transaction.findMany({
+        where: { status: 'MATCHED', ...dateFilter },
+        select: { id: true, billInstanceId: true, incomeEntryId: true },
+      });
+
+      for (const txn of matched) {
+        if (txn.billInstanceId) {
+          await prisma.billInstance.update({
+            where: { id: txn.billInstanceId },
+            data: { isReconciled: false, isFrozen: false, actualAmount: null, reconciledAt: null },
+          });
+        }
+        if (txn.incomeEntryId) {
+          await prisma.incomeEntry.update({
+            where: { id: txn.incomeEntryId },
+            data: { isReconciled: false, actualAmount: null, reconciledAt: null },
+          });
+        }
+        await prisma.transaction.update({
+          where: { id: txn.id },
+          data: { status: 'UNMATCHED', billInstanceId: null, incomeEntryId: null },
+        });
+      }
+    }
+
     const unmatched = await prisma.transaction.findMany({
-      where: { status: 'UNMATCHED' },
+      where: { status: 'UNMATCHED', ...dateFilter },
     });
 
     let matchedCount = 0;
@@ -679,7 +718,7 @@ router.post('/rules/apply', async (_req: Request, res: Response) => {
       }
     }
 
-    res.json({ total: unmatched.length, matched: matchedCount });
+    res.json({ total: unmatched.length, matched: matchedCount, force });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

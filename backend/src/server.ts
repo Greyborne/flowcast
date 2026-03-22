@@ -46,6 +46,22 @@ app.use(errorHandler);
 // ── WebSocket Server ─────────────────────────────────────────────────────────
 initWebSocketServer(httpServer);
 
+// ── Schema Migrations (safe, idempotent) ────────────────────────────────────
+
+/**
+ * Applies lightweight column additions without touching existing data.
+ * Each migration is a no-op if the column already exists.
+ */
+async function runMigrations() {
+  // v2: add actualBalance to BalanceSnapshot (reconciled-actuals-only balance)
+  try {
+    await prisma.$executeRaw`ALTER TABLE "BalanceSnapshot" ADD COLUMN "actualBalance" REAL NOT NULL DEFAULT 0`;
+    console.log('🔧 Migration: added actualBalance column to BalanceSnapshot');
+  } catch {
+    // Column already exists — this is expected on all subsequent startups
+  }
+}
+
 // ── Initial Projection Compute ───────────────────────────────────────────────
 
 /**
@@ -110,12 +126,22 @@ async function ensureInstances() {
 
 async function ensureSnapshots() {
   const snapshotCount = await prisma.balanceSnapshot.count();
-  if (snapshotCount > 0) return;
+
+  // Check if actualBalance column was just added (all zeros despite non-zero running balances)
+  // This happens on the first restart after the schema migration that added actualBalance.
+  if (snapshotCount > 0) {
+    const needsRecompute = await prisma.balanceSnapshot.findFirst({
+      where: { actualBalance: 0, runningBalance: { not: 0 } },
+    });
+    if (!needsRecompute) return;
+    console.log('📐 Detected new actualBalance column — recomputing all balance snapshots...');
+  } else {
+    console.log('📐 No balance snapshots found — computing initial projections...');
+  }
 
   const firstPeriod = await prisma.payPeriod.findFirst({ orderBy: { paydayDate: 'asc' } });
   if (!firstPeriod) return;
 
-  console.log('📐 No balance snapshots found — computing initial projections...');
   const affected = await recomputeFromPeriod(firstPeriod.id);
   console.log(`✅ Computed ${affected.length} balance snapshots.\n`);
 }
@@ -126,6 +152,7 @@ httpServer.listen(PORT, async () => {
   console.log(`\n🚀 FlowCast API running on http://localhost:${PORT}`);
   console.log(`🔌 WebSocket server running on ws://localhost:${PORT}`);
   console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}\n`);
+  await runMigrations();
   await ensureInstances();
   await ensureSnapshots();
 });

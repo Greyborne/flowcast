@@ -16,6 +16,7 @@ export interface PayPeriod {
 export interface BalanceSnapshot {
   plannedBalance: number;
   runningBalance: number;
+  actualBalance: number;
   totalIncome: number;
   totalExpenses: number;
   isStale: boolean;

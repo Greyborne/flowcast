@@ -23,6 +23,7 @@ export interface PeriodProjection {
   endDate: Date;
   plannedBalance: number;
   runningBalance: number;
+  actualBalance: number; // reconciled actuals only — what you actually have in the bank
   difference: number;
   totalIncome: number;
   totalExpenses: number;
@@ -134,11 +135,16 @@ export async function getBillAmountForMonth(
 
 /**
  * Compute the full projection for a single pay period.
- * Returns planned and running balances along with all bill/income line items.
+ * Returns planned, running, and actual balances along with all bill/income line items.
+ *
+ * - plannedBalance: based purely on projected amounts (what you planned to have)
+ * - runningBalance: actuals for reconciled + projected for unreconciled (best estimate)
+ * - actualBalance: only actual reconciled amounts (what you really have in the bank)
  */
 export async function computePeriodProjection(
   payPeriodId: string,
-  previousBalance: number
+  previousBalance: number,
+  previousActualBalance?: number,
 ): Promise<PeriodProjection> {
   const payPeriod = await prisma.payPeriod.findUniqueOrThrow({
     where: { id: payPeriodId },
@@ -201,6 +207,10 @@ export async function computePeriodProjection(
     totalActualExpenses -
     totalUnreconciledExpenses;
 
+  // Actual balance: only actual reconciled amounts — mirrors your real bank statement
+  const prevActual = previousActualBalance ?? previousBalance;
+  const actualBalance = prevActual + totalActualIncome - totalActualExpenses;
+
   return {
     payPeriodId,
     paydayDate: payPeriod.paydayDate,
@@ -208,6 +218,7 @@ export async function computePeriodProjection(
     endDate: payPeriod.endDate,
     plannedBalance,
     runningBalance,
+    actualBalance,
     difference: plannedBalance - runningBalance,
     totalIncome: totalProjectedIncome,
     totalExpenses: totalProjectedExpenses,
@@ -239,11 +250,12 @@ export async function recomputeFromPeriod(fromPayPeriodId: string): Promise<stri
   });
 
   let runningBalance = previousPeriod?.balanceSnapshot?.runningBalance ?? fromPeriod.openingBalance;
+  let actualBalance = previousPeriod?.balanceSnapshot?.actualBalance ?? fromPeriod.openingBalance;
 
   const affectedIds: string[] = [];
 
   for (const period of periodsToRecompute) {
-    const projection = await computePeriodProjection(period.id, runningBalance);
+    const projection = await computePeriodProjection(period.id, runningBalance, actualBalance);
 
     await prisma.balanceSnapshot.upsert({
       where: { payPeriodId: period.id },
@@ -251,6 +263,7 @@ export async function recomputeFromPeriod(fromPayPeriodId: string): Promise<stri
         payPeriodId: period.id,
         plannedBalance: projection.plannedBalance,
         runningBalance: projection.runningBalance,
+        actualBalance: projection.actualBalance,
         totalIncome: projection.totalIncome,
         totalExpenses: projection.totalExpenses,
         isStale: false,
@@ -259,6 +272,7 @@ export async function recomputeFromPeriod(fromPayPeriodId: string): Promise<stri
       update: {
         plannedBalance: projection.plannedBalance,
         runningBalance: projection.runningBalance,
+        actualBalance: projection.actualBalance,
         totalIncome: projection.totalIncome,
         totalExpenses: projection.totalExpenses,
         isStale: false,
@@ -267,6 +281,7 @@ export async function recomputeFromPeriod(fromPayPeriodId: string): Promise<stri
     });
 
     runningBalance = projection.runningBalance;
+    actualBalance = projection.actualBalance;
     affectedIds.push(period.id);
   }
 

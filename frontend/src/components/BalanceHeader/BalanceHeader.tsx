@@ -65,7 +65,7 @@ export default function BalanceHeader() {
             className="text-2xl font-bold text-white hover:text-blue-400 transition-colors text-left"
             title="Click to update current balance"
           >
-            {snapshot ? fmt(snapshot.runningBalance) : '—'}
+            {snapshot ? fmt(snapshot.actualBalance ?? snapshot.runningBalance) : '—'}
           </button>
         )}
         <p className="text-xs text-gray-600 mt-1">Click to update</p>

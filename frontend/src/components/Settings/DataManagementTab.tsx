@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSettings } from '../../hooks/useSettings';
+import { useApplyAutoMatchRules } from '../../hooks/useTransactions';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -279,6 +280,118 @@ function BackupSection() {
   );
 }
 
+// ── Run Rules Section ─────────────────────────────────────────────────────────
+
+function RunRulesSection() {
+  const applyRules = useApplyAutoMatchRules();
+  const [from, setFrom] = useState('');
+  const [to, setTo]     = useState('');
+  const [force, setForce] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError]   = useState<string | null>(null);
+
+  async function handleRun() {
+    setResult(null);
+    setError(null);
+    try {
+      const data = await applyRules.mutateAsync({
+        ...(from  ? { from }  : {}),
+        ...(to    ? { to }    : {}),
+        ...(force ? { force } : {}),
+      });
+      setResult(`Matched ${data.matched} of ${data.total} transaction${data.total !== 1 ? 's' : ''}.`);
+    } catch (err: any) {
+      setError(err.response?.data?.error ?? err.message ?? 'Failed to run rules');
+    }
+  }
+
+  return (
+    <div className="border-t border-gray-800 pt-6 space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-white">Run Match Rules</h3>
+        <p className="text-xs text-gray-500 mt-0.5">
+          Apply auto-match rules to transactions. Optionally restrict to a date range and force re-evaluation of already-matched transactions.
+        </p>
+      </div>
+
+      {/* Date range */}
+      <div className="flex gap-3 items-end">
+        <div className="flex-1 space-y-1">
+          <label className="text-xs text-gray-400">From</label>
+          <input
+            type="date"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 focus:border-blue-500 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none"
+          />
+        </div>
+        <div className="flex-1 space-y-1">
+          <label className="text-xs text-gray-400">To</label>
+          <input
+            type="date"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 focus:border-blue-500 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none"
+          />
+        </div>
+        {(from || to) && (
+          <button
+            onClick={() => { setFrom(''); setTo(''); }}
+            className="text-xs text-gray-500 hover:text-gray-300 pb-1.5 shrink-0"
+          >
+            Clear dates
+          </button>
+        )}
+      </div>
+
+      {/* Force toggle */}
+      <label className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+        force ? 'border-orange-800/60 bg-orange-950/20' : 'border-gray-800 bg-gray-900/40 hover:bg-gray-800/30'
+      }`}>
+        <input
+          type="checkbox"
+          checked={force}
+          onChange={(e) => setForce(e.target.checked)}
+          className="mt-0.5 accent-orange-500 shrink-0"
+        />
+        <div>
+          <p className="text-sm text-white font-medium">Force re-match already matched transactions</p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Unmatches all matched transactions in the range, then re-runs rules against them.
+            Useful after updating or adding rules.
+          </p>
+        </div>
+      </label>
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleRun}
+          disabled={applyRules.isPending}
+          className="px-4 py-2 bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-colors"
+        >
+          {applyRules.isPending ? 'Running…' : '▶ Run Rules'}
+        </button>
+        {!from && !to && (
+          <span className="text-xs text-gray-600">All transactions{force ? ', force re-match' : ', unmatched only'}</span>
+        )}
+        {(from || to) && (
+          <span className="text-xs text-gray-600">
+            {from && to ? `${from} → ${to}` : from ? `From ${from}` : `Through ${to}`}
+            {force ? ', force re-match' : ', unmatched only'}
+          </span>
+        )}
+      </div>
+
+      {result && (
+        <p className="text-xs text-green-300 bg-green-950/30 border border-green-800/40 rounded px-3 py-2">✓ {result}</p>
+      )}
+      {error && (
+        <p className="text-xs text-red-400 bg-red-950/30 border border-red-800/40 rounded px-3 py-2">✕ {error}</p>
+      )}
+    </div>
+  );
+}
+
 // ── Regenerate modal ──────────────────────────────────────────────────────────
 
 function RegenerateModal({ onClose, onDone }: { onClose: () => void; onDone: (msg: string) => void }) {
@@ -492,6 +605,8 @@ export default function DataManagementTab() {
   return (
     <div className="space-y-6">
       <BackupSection />
+
+      <RunRulesSection />
 
       <div className="border-t border-gray-800 pt-6">
         <p className="text-sm text-gray-400 mb-4">

@@ -141,6 +141,7 @@ model BalanceSnapshot {
   payPeriodId    String   @unique
   plannedBalance Float
   runningBalance Float
+  actualBalance  Float    @default(0) // reconciled actuals only — no projected unreconciled amounts
   totalIncome    Float
   totalExpenses  Float
   isStale        Boolean  @default(false)

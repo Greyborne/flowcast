@@ -198,14 +198,17 @@ export function useDeleteAutoMatchRule() {
 
 export function useApplyAutoMatchRules() {
   const qc = useQueryClient();
-  return useMutation<{ total: number; matched: number }, Error>({
-    mutationFn: async () => {
-      const { data } = await axios.post(`${API}/api/transactions/rules/apply`);
+  return useMutation<{ total: number; matched: number }, Error, { from?: string; to?: string; force?: boolean } | void>({
+    mutationFn: async (params) => {
+      const { data } = await axios.post(`${API}/api/transactions/rules/apply`, params ?? {});
       return data;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['transactions'] });
       qc.invalidateQueries({ queryKey: ['importBatches'] });
+      qc.invalidateQueries({ queryKey: ['billGrid'] });
+      qc.invalidateQueries({ queryKey: ['incomeGrid'] });
+      qc.invalidateQueries({ queryKey: ['payPeriods'] });
     },
   });
 }

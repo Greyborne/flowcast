@@ -52,8 +52,15 @@ function filterAndSort(
 
   return [...filtered].sort((a, b) => {
     let cmp = 0;
-    if (sortCol === 'date') cmp = a.date.localeCompare(b.date);
-    else if (sortCol === 'description') cmp = a.description.localeCompare(b.description);
+    if (sortCol === 'date') {
+      cmp = a.date.localeCompare(b.date);
+      if (cmp === 0) {
+        // Same day: income (positive) always before expenses (negative), matching bank statement order
+        const aIsExpense = a.amount < 0 ? 1 : 0;
+        const bIsExpense = b.amount < 0 ? 1 : 0;
+        return aIsExpense - bIsExpense;
+      }
+    } else if (sortCol === 'description') cmp = a.description.localeCompare(b.description);
     else if (sortCol === 'amount') cmp = Math.abs(a.amount) - Math.abs(b.amount);
     else if (sortCol === 'status') cmp = a.status.localeCompare(b.status);
     return sortDir === 'asc' ? cmp : -cmp;
