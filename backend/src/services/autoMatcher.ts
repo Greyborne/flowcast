@@ -235,6 +235,27 @@ export async function findMatchCandidates(
       for (const entry of filterByRecency(mappedIncome)) {
         candidates.push(entry);
       }
+
+      // Also show income sources not represented by any unreconciled entry —
+      // covers sources where all entries are reconciled (ad-hoc / reusable).
+      const instancedSourceIds = new Set(entries.map((e) => e.incomeSourceId));
+      const sources = await prisma.incomeSource.findMany({
+        where: { isActive: true, name: { contains: term } },
+      });
+      for (const source of sources) {
+        if (!instancedSourceIds.has(source.id)) {
+          candidates.push({
+            kind: 'TEMPLATE',
+            id: source.id,
+            templateId: source.id,
+            payPeriodId: null,
+            name: source.name,
+            projectedAmount: source.defaultAmount,
+            paydayDate: null,
+            type: 'INCOME',
+          });
+        }
+      }
     } else {
       const windowMs = windowDays * 24 * 60 * 60 * 1000;
       const from = new Date(date.getTime() - windowMs);

@@ -255,14 +255,14 @@ router.get('/:id/candidates', async (req: Request, res: Response) => {
 // ── Match / Unmatch ───────────────────────────────────────────────────────────
 
 // PATCH /api/transactions/:id/match
-// Body: { billInstanceId } | { billTemplateId } | { incomeEntryId }
-// billTemplateId is used for discretionary expenses with no existing instance —
-// the backend finds the containing pay period and upserts an instance.
+// Body: { billInstanceId } | { billTemplateId } | { incomeEntryId } | { incomeSourceId }
+// billTemplateId / incomeSourceId are used for ad-hoc items with no existing instance —
+// the backend finds the containing pay period and creates a new entry each time.
 router.patch('/:id/match', async (req: Request, res: Response) => {
   try {
-    const { billInstanceId, billTemplateId, incomeEntryId } = req.body;
-    if (!billInstanceId && !billTemplateId && !incomeEntryId) {
-      return res.status(400).json({ error: 'billInstanceId, billTemplateId, or incomeEntryId required' });
+    const { billInstanceId, billTemplateId, incomeEntryId, incomeSourceId } = req.body;
+    if (!billInstanceId && !billTemplateId && !incomeEntryId && !incomeSourceId) {
+      return res.status(400).json({ error: 'billInstanceId, billTemplateId, incomeEntryId, or incomeSourceId required' });
     }
 
     const txn = await prisma.transaction.findUniqueOrThrow({ where: { id: req.params.id } });
@@ -338,6 +338,30 @@ router.patch('/:id/match', async (req: Request, res: Response) => {
       });
       resolvedIncomeEntryId = entry.id;
       payPeriodId = entry.payPeriodId;
+    } else if (incomeSourceId) {
+      // Ad-hoc income source — find the period containing the transaction date and
+      // create a new income entry (never upsert — multiple ad-hoc entries per period are allowed).
+      const source = await prisma.incomeSource.findUniqueOrThrow({ where: { id: incomeSourceId } });
+      const period = await prisma.payPeriod.findFirst({
+        where: { startDate: { lte: txn.date }, endDate: { gte: txn.date } },
+      }) ?? await prisma.payPeriod.findFirst({
+        where: { paydayDate: { gte: txn.date } }, orderBy: { paydayDate: 'asc' },
+      }) ?? await prisma.payPeriod.findFirst({ orderBy: { paydayDate: 'desc' } });
+
+      if (!period) return res.status(400).json({ error: 'No pay periods found' });
+
+      const entry = await prisma.incomeEntry.create({
+        data: {
+          payPeriodId: period.id,
+          incomeSourceId: source.id,
+          projectedAmount: source.defaultAmount,
+          actualAmount: Math.abs(txn.amount),
+          isReconciled: true,
+          reconciledAt: new Date(),
+        },
+      });
+      resolvedIncomeEntryId = entry.id;
+      payPeriodId = period.id;
     }
 
     await prisma.transaction.update({

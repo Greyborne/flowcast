@@ -127,8 +127,10 @@ function MatchPicker({
     if (!pendingCandidate) return;
     const c = pendingCandidate;
 
-    if (c.kind === 'TEMPLATE') {
+    if (c.kind === 'TEMPLATE' && c.type === 'BILL') {
       await matchMutation.mutateAsync({ id: transaction.id, billTemplateId: c.id });
+    } else if (c.kind === 'TEMPLATE' && c.type === 'INCOME') {
+      await matchMutation.mutateAsync({ id: transaction.id, incomeSourceId: c.id });
     } else if (c.type === 'BILL') {
       await matchMutation.mutateAsync({ id: transaction.id, billInstanceId: c.id });
     } else {

@@ -63,9 +63,9 @@ export function useImportTransactions() {
 
 export function useMatchTransaction() {
   const qc = useQueryClient();
-  return useMutation<void, Error, { id: string; billInstanceId?: string; billTemplateId?: string; incomeEntryId?: string }>({
-    mutationFn: async ({ id, billInstanceId, billTemplateId, incomeEntryId }) => {
-      await axios.patch(`${API}/api/transactions/${id}/match`, { billInstanceId, billTemplateId, incomeEntryId });
+  return useMutation<void, Error, { id: string; billInstanceId?: string; billTemplateId?: string; incomeEntryId?: string; incomeSourceId?: string }>({
+    mutationFn: async ({ id, billInstanceId, billTemplateId, incomeEntryId, incomeSourceId }) => {
+      await axios.patch(`${API}/api/transactions/${id}/match`, { billInstanceId, billTemplateId, incomeEntryId, incomeSourceId });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['transactions'] });
