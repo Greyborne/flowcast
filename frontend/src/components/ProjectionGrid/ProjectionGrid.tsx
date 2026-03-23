@@ -1,7 +1,8 @@
 import { useState, Fragment, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { useQueryClient } from '@tanstack/react-query';
-import { usePayPeriods, useBillGrid, useIncomeGrid, useCreateAdhocBill, useReopenPeriod } from '../../hooks/usePayPeriods';
+import { usePayPeriods, useBillGrid, useIncomeGrid, useCreateAdhocBill, useReopenPeriod, useMoveInstance } from '../../hooks/usePayPeriods';
+import type { ReopenResult } from '../../hooks/usePayPeriods';
 import type { PayPeriod, BillTemplate, BillGridInstance, IncomeSource, IncomeGridEntry } from '../../types';
 import ClosePeriodModal from './ClosePeriodModal';
 
@@ -257,7 +258,21 @@ function PeriodDetailPanel({
   const [checkedIncome,   setCheckedIncome]   = useState<Set<string>>(new Set());
   const [activePanelCell, setActivePanelCell] = useState<ActiveCell>(null);
   const [showCloseModal,  setShowCloseModal]  = useState(false);
+  const [cascadeDialog,   setCascadeDialog]   = useState<ReopenResult | null>(null);
   const reopenMutation = useReopenPeriod();
+  const moveMutation   = useMoveInstance();
+
+  const handleReopen = async () => {
+    const result = await reopenMutation.mutateAsync({ periodId: period.id });
+    if (result.requiresCascade) {
+      setCascadeDialog(result);
+    }
+  };
+
+  const handleReopenCascade = async () => {
+    setCascadeDialog(null);
+    await reopenMutation.mutateAsync({ periodId: period.id, cascade: true });
+  };
 
   const projected = period.balanceSnapshot?.runningBalance;
   const planned   = period.balanceSnapshot?.plannedBalance;
@@ -384,11 +399,11 @@ function PeriodDetailPanel({
             </button>
           ) : (
             <button
-              onClick={() => reopenMutation.mutate(period.id)}
+              onClick={handleReopen}
               disabled={reopenMutation.isPending}
               className="text-[11px] px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white border border-gray-700 transition-colors disabled:opacity-50"
             >
-              🔓 Reopen
+              🔓 {reopenMutation.isPending ? '…' : 'Reopen'}
             </button>
           )}
           <button
@@ -561,6 +576,10 @@ function PeriodDetailPanel({
                           setActivePanelCell(null);
                         }}
                         onCancel={() => setActivePanelCell(null)}
+                        onMove={!inst.isReconciled ? async () => {
+                          await moveMutation.mutateAsync({ periodId: period.id, billInstanceId: inst.id });
+                          setActivePanelCell(null);
+                        } : undefined}
                       />
                     ) : (
                       <UnreconcileConfirm
@@ -587,6 +606,40 @@ function PeriodDetailPanel({
           paydayLabel={fmtDate(period.paydayDate)}
           onClose={() => setShowCloseModal(false)}
         />
+      )}
+
+      {cascadeDialog?.requiresCascade && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 max-w-sm w-full shadow-2xl">
+            <h3 className="text-white font-semibold mb-2">Reopen multiple periods?</h3>
+            <p className="text-gray-400 text-sm mb-3">
+              Reopening this period requires also reopening {cascadeDialog.laterClosedPeriods!.length} later closed period{cascadeDialog.laterClosedPeriods!.length > 1 ? 's' : ''}:
+            </p>
+            <ul className="text-xs text-gray-500 mb-4 space-y-1 pl-3">
+              {cascadeDialog.laterClosedPeriods!.map((p) => (
+                <li key={p.id}>• {fmtDate(p.paydayDate)}</li>
+              ))}
+            </ul>
+            <p className="text-gray-500 text-xs mb-4">
+              Transactions already reconciled in those periods will remain reconciled.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setCascadeDialog(null)}
+                className="text-sm text-gray-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReopenCascade}
+                disabled={reopenMutation.isPending}
+                className="text-sm bg-yellow-700 hover:bg-yellow-600 text-white px-4 py-1.5 rounded transition-colors disabled:opacity-50"
+              >
+                {reopenMutation.isPending ? 'Reopening…' : 'Reopen all'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -673,6 +726,7 @@ function BillRow({
   selectedPeriodId: string | null;
   onCreateAdhoc: (payPeriodId: string) => void;
 }) {
+  const moveMutation = useMoveInstance();
   return (
     <tr className="border-b border-gray-800/60 hover:bg-gray-900/40 group/row">
       <td className="sticky left-0 bg-gray-950 py-2 px-4 text-xs text-gray-300 border-r border-gray-800 z-10 whitespace-nowrap">
@@ -720,6 +774,10 @@ function BillRow({
                   setActiveCell(null);
                 }}
                 onCancel={() => setActiveCell(null)}
+                onMove={!inst.isReconciled ? async () => {
+                  await moveMutation.mutateAsync({ periodId: p.id, billInstanceId: inst.id });
+                  setActiveCell(null);
+                } : undefined}
               />
             ) : mode === 'unreconcile' ? (
               <UnreconcileConfirm
@@ -802,12 +860,13 @@ function UnreconcileConfirm({
 }
 
 function ReconcileInput({
-  defaultValue, onDraftSave, onReconcile, onCancel,
+  defaultValue, onDraftSave, onReconcile, onCancel, onMove,
 }: {
   defaultValue: number;
   onDraftSave: (amount: number, cascade: boolean) => Promise<void>;
   onReconcile: (amount: number, cascade: boolean) => Promise<void>;
   onCancel: () => void;
+  onMove?: () => Promise<void>;
 }) {
   const [value,   setValue]   = useState(String(defaultValue));
   const [cascade, setCascade] = useState(true);
@@ -869,6 +928,16 @@ function ReconcileInput({
         >
           {cascade ? 'All future' : 'This only'}
         </button>
+        {onMove && (
+          <button
+            onClick={async () => { setSaving(true); try { await onMove(); } finally { setSaving(false); } }}
+            disabled={saving}
+            title="Move to next period"
+            className="text-[9px] px-1.5 py-0.5 rounded border border-gray-600 text-gray-400 hover:text-blue-400 hover:border-blue-600 disabled:opacity-50 transition-colors whitespace-nowrap"
+          >
+            Move →
+          </button>
+        )}
       </div>
     </div>
   );

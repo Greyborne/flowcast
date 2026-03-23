@@ -200,15 +200,87 @@ router.post('/:id/close', async (req: Request, res: Response) => {
 });
 
 // POST /api/pay-periods/:id/reopen — unlock a closed period
+// Body: { cascade?: boolean }
+// If later closed periods exist and cascade is not true, returns { requiresCascade: true, laterClosedPeriods }
+// When cascade is true (or no later closed periods), unclosing sets isClosed=false only — reconciled
+// transactions and their linked instances/entries remain reconciled.
 router.post('/:id/reopen', async (req: Request, res: Response) => {
   try {
-    await prisma.payPeriod.update({
-      where: { id: req.params.id },
+    const { cascade = false } = req.body as { cascade?: boolean };
+
+    const period = await prisma.payPeriod.findUniqueOrThrow({ where: { id: req.params.id } });
+
+    const laterClosed = await prisma.payPeriod.findMany({
+      where: { paydayDate: { gt: period.paydayDate }, isClosed: true },
+      orderBy: { paydayDate: 'asc' },
+      select: { id: true, paydayDate: true },
+    });
+
+    if (laterClosed.length > 0 && !cascade) {
+      return res.json({ requiresCascade: true, laterClosedPeriods: laterClosed });
+    }
+
+    const idsToUnclose = [req.params.id, ...laterClosed.map((p) => p.id)];
+    await prisma.payPeriod.updateMany({
+      where: { id: { in: idsToUnclose } },
       data: { isClosed: false },
     });
+
     const affected = await recomputeFromPeriod(req.params.id);
     broadcast({ type: 'BALANCE_UPDATE', payPeriodIds: affected });
     res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/pay-periods/:id/move-instance
+// Body: { billInstanceId: string }
+// Moves an unreconciled bill instance from this period to the next period.
+// The next period must exist and must not be closed.
+router.post('/:id/move-instance', async (req: Request, res: Response) => {
+  try {
+    const { billInstanceId } = req.body as { billInstanceId: string };
+    if (!billInstanceId) {
+      return res.status(400).json({ error: 'billInstanceId required' });
+    }
+
+    const inst = await prisma.billInstance.findUniqueOrThrow({ where: { id: billInstanceId } });
+    if (inst.payPeriodId !== req.params.id) {
+      return res.status(400).json({ error: 'Instance does not belong to this period' });
+    }
+    if (inst.isReconciled) {
+      return res.status(400).json({ error: 'Cannot move a reconciled instance' });
+    }
+
+    const currentPeriod = await prisma.payPeriod.findUniqueOrThrow({ where: { id: req.params.id } });
+    const nextPeriod = await prisma.payPeriod.findFirst({
+      where: { paydayDate: { gt: currentPeriod.paydayDate } },
+      orderBy: { paydayDate: 'asc' },
+    });
+    if (!nextPeriod) {
+      return res.status(400).json({ error: 'No next period exists to move the instance to' });
+    }
+    if (nextPeriod.isClosed) {
+      return res.status(400).json({ error: 'Next period is closed; reopen it before moving instances into it' });
+    }
+
+    await prisma.billInstance.delete({ where: { id: billInstanceId } });
+    await prisma.billInstance.upsert({
+      where: { payPeriodId_billTemplateId: { payPeriodId: nextPeriod.id, billTemplateId: inst.billTemplateId } },
+      create: {
+        payPeriodId: nextPeriod.id,
+        billTemplateId: inst.billTemplateId,
+        projectedAmount: inst.projectedAmount,
+        isReconciled: false,
+        isFrozen: false,
+      },
+      update: {},
+    });
+
+    const affected = await recomputeFromPeriod(currentPeriod.id);
+    broadcast({ type: 'BALANCE_UPDATE', payPeriodIds: affected });
+    res.json({ success: true, movedToPeriodId: nextPeriod.id });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

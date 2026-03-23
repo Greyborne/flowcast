@@ -35,9 +35,9 @@ router.post('/clear', async (req: Request, res: Response) => {
 
     const summary: Record<string, number> = {};
 
-    // ── 1. Reconciliations — un-reconcile all items, wipe logs ────────────────
+    // ── 1. Reconciliations — un-reconcile all items, wipe logs, unlink transactions ──
     if (targets.includes('reconciliations')) {
-      const [bills, entries, logs] = await Promise.all([
+      const [bills, entries, txns, logs] = await Promise.all([
         prisma.billInstance.updateMany({
           where: { isReconciled: true },
           data: { isReconciled: false, isFrozen: false, actualAmount: null, reconciledAt: null },
@@ -46,10 +46,15 @@ router.post('/clear', async (req: Request, res: Response) => {
           where: { isReconciled: true },
           data: { isReconciled: false, actualAmount: null, reconciledAt: null },
         }),
+        prisma.transaction.updateMany({
+          where: { status: 'MATCHED' },
+          data: { status: 'UNMATCHED', billInstanceId: null, incomeEntryId: null },
+        }),
         prisma.reconciliationLog.deleteMany({}),
       ]);
       summary.billsUnreconciled = bills.count;
       summary.incomeUnreconciled = entries.count;
+      summary.transactionsUnmatched = txns.count;
       summary.logsDeleted = logs.count;
     }
 

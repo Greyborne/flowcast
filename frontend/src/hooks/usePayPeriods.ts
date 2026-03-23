@@ -122,17 +122,39 @@ export function useClosePeriod() {
   });
 }
 
+export interface ReopenResult {
+  success?: boolean;
+  requiresCascade?: boolean;
+  laterClosedPeriods?: { id: string; paydayDate: string }[];
+}
+
 export function useReopenPeriod() {
   const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (periodId: string) => {
-      const { data } = await axios.post(`${API}/api/pay-periods/${periodId}/reopen`);
+  return useMutation<ReopenResult, Error, { periodId: string; cascade?: boolean }>({
+    mutationFn: async ({ periodId, cascade = false }) => {
+      const { data } = await axios.post(`${API}/api/pay-periods/${periodId}/reopen`, { cascade });
+      return data as ReopenResult;
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        qc.invalidateQueries({ queryKey: ['payPeriods'] });
+        qc.invalidateQueries({ queryKey: ['billGrid'] });
+        qc.invalidateQueries({ queryKey: ['incomeGrid'] });
+      }
+    },
+  });
+}
+
+export function useMoveInstance() {
+  const qc = useQueryClient();
+  return useMutation<{ success: boolean; movedToPeriodId: string }, Error, { periodId: string; billInstanceId: string }>({
+    mutationFn: async ({ periodId, billInstanceId }) => {
+      const { data } = await axios.post(`${API}/api/pay-periods/${periodId}/move-instance`, { billInstanceId });
       return data;
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['payPeriods'] });
       qc.invalidateQueries({ queryKey: ['billGrid'] });
-      qc.invalidateQueries({ queryKey: ['incomeGrid'] });
+      qc.invalidateQueries({ queryKey: ['payPeriods'] });
     },
   });
 }

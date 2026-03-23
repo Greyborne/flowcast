@@ -31,23 +31,30 @@ export interface MatchCandidate {
  * - If any past (paydayDate <= today) unreconciled instances exist → keep only those.
  * - Otherwise → keep only the single next upcoming instance.
  */
-function filterByRecency<T extends { templateId: string; paydayDate: Date | null }>(instances: T[]): T[] {
-  const now = new Date();
-  const byTemplate = new Map<string, T[]>();
+/**
+ * For each source/template, keep only the single most-relevant entry relative to txnDate:
+ *   - Most recent past entry (paydayDate <= txnDate), OR
+ *   - Earliest future entry if no past entry exists.
+ * This prevents showing Feb 26 as a candidate when matching a Feb 25 transaction.
+ */
+function filterByDate(txnDate: Date, instances: MatchCandidate[]): MatchCandidate[] {
+  const byTemplate = new Map<string, MatchCandidate[]>();
   for (const inst of instances) {
     const list = byTemplate.get(inst.templateId) ?? [];
     list.push(inst);
     byTemplate.set(inst.templateId, list);
   }
 
-  const result: T[] = [];
+  const result: MatchCandidate[] = [];
   for (const list of byTemplate.values()) {
-    const past = list.filter((i) => i.paydayDate && i.paydayDate <= now);
+    const past = list.filter((i) => i.paydayDate && i.paydayDate <= txnDate);
     if (past.length > 0) {
-      result.push(...past);
+      // Keep only the most recent past entry
+      past.sort((a, b) => b.paydayDate!.getTime() - a.paydayDate!.getTime());
+      result.push(past[0]);
     } else {
-      // No past instances — take only the earliest future one
-      const future = list.filter((i) => i.paydayDate && i.paydayDate > now);
+      // No past entries — take only the earliest future one
+      const future = list.filter((i) => i.paydayDate && i.paydayDate > txnDate);
       future.sort((a, b) => a.paydayDate!.getTime() - b.paydayDate!.getTime());
       if (future.length > 0) result.push(future[0]);
     }
@@ -156,7 +163,7 @@ export async function findMatchCandidates(
         type: 'BILL' as const,
       }));
 
-      for (const inst of filterByRecency(mapped)) {
+      for (const inst of filterByDate(date, mapped)) {
         candidates.push(inst);
       }
 
@@ -232,7 +239,7 @@ export async function findMatchCandidates(
         type: 'INCOME' as const,
       }));
 
-      for (const entry of filterByRecency(mappedIncome)) {
+      for (const entry of filterByDate(date, mappedIncome)) {
         candidates.push(entry);
       }
 

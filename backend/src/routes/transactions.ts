@@ -267,6 +267,36 @@ router.patch('/:id/match', async (req: Request, res: Response) => {
 
     const txn = await prisma.transaction.findUniqueOrThrow({ where: { id: req.params.id } });
 
+    // ── Closed period guard — check before any writes ─────────────────────────
+    if (billInstanceId) {
+      const inst = await prisma.billInstance.findUnique({
+        where: { id: billInstanceId },
+        include: { payPeriod: { select: { id: true, isClosed: true } } },
+      });
+      if (inst?.payPeriod.isClosed) {
+        return res.status(409).json({ error: 'PERIOD_CLOSED', periodId: inst.payPeriod.id, message: 'Target period is closed. Reopen it before matching.' });
+      }
+    } else if (billTemplateId || incomeSourceId) {
+      const period = await prisma.payPeriod.findFirst({
+        where: { startDate: { lte: txn.date }, endDate: { gte: txn.date } },
+        select: { id: true, isClosed: true },
+      }) ?? await prisma.payPeriod.findFirst({
+        where: { paydayDate: { gte: txn.date } }, orderBy: { paydayDate: 'asc' },
+        select: { id: true, isClosed: true },
+      }) ?? await prisma.payPeriod.findFirst({ orderBy: { paydayDate: 'desc' }, select: { id: true, isClosed: true } });
+      if (period?.isClosed) {
+        return res.status(409).json({ error: 'PERIOD_CLOSED', periodId: period.id, message: 'Target period is closed. Reopen it before matching.' });
+      }
+    } else if (incomeEntryId) {
+      const entry = await prisma.incomeEntry.findUnique({
+        where: { id: incomeEntryId },
+        include: { payPeriod: { select: { id: true, isClosed: true } } },
+      });
+      if (entry?.payPeriod.isClosed) {
+        return res.status(409).json({ error: 'PERIOD_CLOSED', periodId: entry.payPeriod.id, message: 'Target period is closed. Reopen it before matching.' });
+      }
+    }
+
     // Unmatch any previous association
     if (txn.billInstanceId) {
       await prisma.billInstance.update({
@@ -313,19 +343,8 @@ router.patch('/:id/match', async (req: Request, res: Response) => {
 
       const inst = await prisma.billInstance.upsert({
         where: { payPeriodId_billTemplateId: { payPeriodId: period.id, billTemplateId: template.id } },
-        create: {
-          payPeriodId: period.id,
-          billTemplateId: template.id,
-          projectedAmount: template.defaultAmount,
-          isReconciled: true,
-          actualAmount: Math.abs(txn.amount),
-          reconciledAt: new Date(),
-        },
-        update: {
-          isReconciled: true,
-          actualAmount: Math.abs(txn.amount),
-          reconciledAt: new Date(),
-        },
+        create: { payPeriodId: period.id, billTemplateId: template.id, projectedAmount: template.defaultAmount },
+        update: {},
       });
       resolvedBillInstanceId = inst.id;
       payPeriodId = period.id;
@@ -339,8 +358,9 @@ router.patch('/:id/match', async (req: Request, res: Response) => {
       resolvedIncomeEntryId = entry.id;
       payPeriodId = entry.payPeriodId;
     } else if (incomeSourceId) {
-      // Ad-hoc income source — find the period containing the transaction date and
-      // create a new income entry (never upsert — multiple ad-hoc entries per period are allowed).
+      // Income source — find the period containing the transaction date, then upsert a single
+      // income entry for that (period, source) pair. Multiple transactions can link to the same
+      // entry; actualAmount is always recomputed as the sum of all linked transactions.
       const source = await prisma.incomeSource.findUniqueOrThrow({ where: { id: incomeSourceId } });
       const period = await prisma.payPeriod.findFirst({
         where: { startDate: { lte: txn.date }, endDate: { gte: txn.date } },
@@ -350,15 +370,10 @@ router.patch('/:id/match', async (req: Request, res: Response) => {
 
       if (!period) return res.status(400).json({ error: 'No pay periods found' });
 
-      const entry = await prisma.incomeEntry.create({
-        data: {
-          payPeriodId: period.id,
-          incomeSourceId: source.id,
-          projectedAmount: source.defaultAmount,
-          actualAmount: Math.abs(txn.amount),
-          isReconciled: true,
-          reconciledAt: new Date(),
-        },
+      const entry = await prisma.incomeEntry.upsert({
+        where: { payPeriodId_incomeSourceId: { payPeriodId: period.id, incomeSourceId: source.id } },
+        create: { payPeriodId: period.id, incomeSourceId: source.id, projectedAmount: source.defaultAmount },
+        update: {},
       });
       resolvedIncomeEntryId = entry.id;
       payPeriodId = period.id;
@@ -368,6 +383,28 @@ router.patch('/:id/match', async (req: Request, res: Response) => {
       where: { id: req.params.id },
       data: { billInstanceId: resolvedBillInstanceId, incomeEntryId: resolvedIncomeEntryId, status: 'MATCHED' },
     });
+
+    // Recompute actualAmount as sum of all transactions now linked to the same instance/entry.
+    if (resolvedBillInstanceId) {
+      const linked = await prisma.transaction.findMany({
+        where: { billInstanceId: resolvedBillInstanceId, status: 'MATCHED' },
+      });
+      const totalActual = linked.reduce((sum: number, t: { amount: number }) => sum + Math.abs(t.amount), 0);
+      await prisma.billInstance.update({
+        where: { id: resolvedBillInstanceId },
+        data: { isReconciled: true, actualAmount: totalActual, reconciledAt: new Date() },
+      });
+    }
+    if (resolvedIncomeEntryId) {
+      const linked = await prisma.transaction.findMany({
+        where: { incomeEntryId: resolvedIncomeEntryId, status: 'MATCHED' },
+      });
+      const totalActual = linked.reduce((sum: number, t: { amount: number }) => sum + Math.abs(t.amount), 0);
+      await prisma.incomeEntry.update({
+        where: { id: resolvedIncomeEntryId },
+        data: { isReconciled: true, actualAmount: totalActual, reconciledAt: new Date() },
+      });
+    }
 
     if (payPeriodId) {
       const affected = await recomputeFromPeriod(payPeriodId);
@@ -386,25 +423,53 @@ router.patch('/:id/unmatch', async (req: Request, res: Response) => {
     const txn = await prisma.transaction.findUniqueOrThrow({ where: { id: req.params.id } });
     const affectedPeriods: string[] = [];
 
-    if (txn.billInstanceId) {
-      const inst = await prisma.billInstance.update({
-        where: { id: txn.billInstanceId },
-        data: { isReconciled: false, actualAmount: null, reconciledAt: null },
-      });
-      affectedPeriods.push(inst.payPeriodId);
-    }
-    if (txn.incomeEntryId) {
-      const entry = await prisma.incomeEntry.update({
-        where: { id: txn.incomeEntryId },
-        data: { isReconciled: false, actualAmount: null, reconciledAt: null },
-      });
-      affectedPeriods.push(entry.payPeriodId);
-    }
-
+    // Unlink the transaction first so remaining-count checks are accurate.
     await prisma.transaction.update({
       where: { id: req.params.id },
       data: { billInstanceId: null, incomeEntryId: null, status: 'UNMATCHED' },
     });
+
+    if (txn.billInstanceId) {
+      const remaining = await prisma.transaction.findMany({
+        where: { billInstanceId: txn.billInstanceId, status: 'MATCHED' },
+      });
+      if (remaining.length === 0) {
+        const inst = await prisma.billInstance.update({
+          where: { id: txn.billInstanceId },
+          data: { isReconciled: false, actualAmount: null, reconciledAt: null },
+        });
+        affectedPeriods.push(inst.payPeriodId);
+      } else {
+        const totalActual = remaining.reduce((sum: number, t: { amount: number }) => sum + Math.abs(t.amount), 0);
+        const inst = await prisma.billInstance.update({
+          where: { id: txn.billInstanceId },
+          data: { actualAmount: totalActual },
+        });
+        affectedPeriods.push(inst.payPeriodId);
+      }
+    }
+    if (txn.incomeEntryId) {
+      // Recompute the entry's actualAmount from remaining linked transactions.
+      const remaining = await prisma.transaction.findMany({
+        where: { incomeEntryId: txn.incomeEntryId, status: 'MATCHED' },
+      });
+      if (remaining.length === 0) {
+        // No transactions left — un-reconcile the entry so it shows as projected again
+        const entry = await prisma.incomeEntry.update({
+          where: { id: txn.incomeEntryId },
+          data: { isReconciled: false, actualAmount: null, reconciledAt: null },
+        });
+        affectedPeriods.push(entry.payPeriodId);
+      } else {
+        // Other transactions still linked — update actualAmount to their sum
+        const totalActual = remaining.reduce((sum: number, t: { amount: number }) => sum + Math.abs(t.amount), 0);
+        const entry = await prisma.incomeEntry.update({
+          where: { id: txn.incomeEntryId },
+          data: { actualAmount: totalActual },
+        });
+        affectedPeriods.push(entry.payPeriodId);
+      }
+    }
 
     if (affectedPeriods.length > 0) {
       const sorted = await prisma.payPeriod.findMany({
@@ -644,7 +709,10 @@ router.post('/rules/apply', async (req: Request, res: Response) => {
           }),
         ]);
 
-        let inst = pickClosest(txn.date, before, after);
+        // Exclude closed-period instances from the candidate set before selecting
+        const filteredBefore = (before as any)?.payPeriod?.isClosed ? null : before;
+        const filteredAfter  = (after  as any)?.payPeriod?.isClosed ? null : after;
+        let inst = pickClosest(txn.date, filteredBefore, filteredAfter);
 
         if (!inst) {
           // Discretionary bill — no instances exist; create one in the period containing the transaction
@@ -655,7 +723,7 @@ router.post('/rules/apply', async (req: Request, res: Response) => {
             where: { paydayDate: { gte: txn.date } }, orderBy: { paydayDate: 'asc' },
           }) ?? await prisma.payPeriod.findFirst({ orderBy: { paydayDate: 'desc' } });
 
-          if (template && period) {
+          if (template && period && !period.isClosed) {
             inst = await prisma.billInstance.upsert({
               where: { payPeriodId_billTemplateId: { payPeriodId: period.id, billTemplateId: template.id } },
               create: { payPeriodId: period.id, billTemplateId: template.id, projectedAmount: template.defaultAmount, isReconciled: false, isFrozen: false },
@@ -670,39 +738,55 @@ router.post('/rules/apply', async (req: Request, res: Response) => {
             where: { id: txn.id },
             data: { status: 'MATCHED', billInstanceId: inst.id },
           });
+          const linkedBill = await prisma.transaction.findMany({
+            where: { billInstanceId: inst.id, status: 'MATCHED' },
+          });
+          const totalActual = linkedBill.reduce((sum: number, t: { amount: number }) => sum + Math.abs(t.amount), 0);
           await prisma.billInstance.update({
             where: { id: inst.id },
-            data: { isReconciled: true, actualAmount: Math.abs(txn.amount), reconciledAt: new Date() },
+            data: { isReconciled: true, actualAmount: totalActual, reconciledAt: inst.reconciledAt ?? new Date() },
           });
           affectedPeriodIds.add(inst.payPeriodId);
           matchedCount++;
         }
       } else {
-        const [before, after] = await Promise.all([
-          prisma.incomeEntry.findFirst({
-            where: { incomeSourceId: match.targetId, isReconciled: false, payPeriod: { paydayDate: { lte: txn.date } } },
-            orderBy: { payPeriod: { paydayDate: 'desc' } },
-            include: { payPeriod: true },
-          }),
-          prisma.incomeEntry.findFirst({
-            where: { incomeSourceId: match.targetId, isReconciled: false, payPeriod: { paydayDate: { gt: txn.date } } },
-            orderBy: { payPeriod: { paydayDate: 'asc' } },
-            include: { payPeriod: true },
-          }),
-        ]);
-        const entry = pickClosest(txn.date, before, after);
-        if (entry) {
-          await prisma.transaction.update({
-            where: { id: txn.id },
-            data: { status: 'MATCHED', incomeEntryId: entry.id },
-          });
-          await prisma.incomeEntry.update({
-            where: { id: entry.id },
-            data: { isReconciled: true, actualAmount: Math.abs(txn.amount), reconciledAt: new Date() },
-          });
-          affectedPeriodIds.add(entry.payPeriodId);
-          matchedCount++;
-        }
+        // Income: match to the period that CONTAINS the transaction date, not just nearest payday.
+        // This ensures a transaction on Mar 11 lands in the Feb 26–Mar 11 period, not Mar 12.
+        const period = await prisma.payPeriod.findFirst({
+          where: { startDate: { lte: txn.date }, endDate: { gte: txn.date } },
+        }) ?? await prisma.payPeriod.findFirst({
+          where: { paydayDate: { gte: txn.date } }, orderBy: { paydayDate: 'asc' },
+        }) ?? await prisma.payPeriod.findFirst({ orderBy: { paydayDate: 'desc' } });
+
+        if (!period) continue;
+        if (period.isClosed) continue; // Never post to a closed period
+
+        // Upsert a single entry for this (period, source) — multiple transactions share one bucket.
+        const source = await prisma.incomeSource.findUnique({ where: { id: match.targetId } });
+        if (!source) continue;
+
+        const entry = await prisma.incomeEntry.upsert({
+          where: { payPeriodId_incomeSourceId: { payPeriodId: period.id, incomeSourceId: source.id } },
+          create: { payPeriodId: period.id, incomeSourceId: source.id, projectedAmount: source.defaultAmount },
+          update: {},
+        });
+
+        await prisma.transaction.update({
+          where: { id: txn.id },
+          data: { status: 'MATCHED', incomeEntryId: entry.id },
+        });
+
+        // Recompute actualAmount as the sum of all transactions now linked to this entry.
+        const linked = await prisma.transaction.findMany({
+          where: { incomeEntryId: entry.id, status: 'MATCHED' },
+        });
+        const totalActual = linked.reduce((sum: number, t: { amount: number }) => sum + Math.abs(t.amount), 0);
+        await prisma.incomeEntry.update({
+          where: { id: entry.id },
+          data: { isReconciled: true, actualAmount: totalActual, reconciledAt: entry.reconciledAt ?? new Date() },
+        });
+        affectedPeriodIds.add(entry.payPeriodId);
+        matchedCount++;
       }
     }
 
