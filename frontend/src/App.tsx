@@ -60,13 +60,17 @@ function AppContent() {
     <Layout>
       <Routes>
         <Route path="/" element={
-          <>
+          <div className="h-full overflow-y-auto">
             <BalanceHeader />
             <ProjectionGrid />
-          </>
+          </div>
         } />
         <Route path="/transactions" element={<TransactionsPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/settings" element={
+          <div className="h-full overflow-y-auto">
+            <SettingsPage />
+          </div>
+        } />
       </Routes>
     </Layout>
   );

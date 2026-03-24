@@ -627,19 +627,6 @@ router.delete('/batches/:id', async (req: Request, res: Response) => {
 
 // ── Auto Match Rules ──────────────────────────────────────────────────────────
 
-/** Return whichever of two instances/entries is closest in paydayDate to txnDate (null-safe). */
-function pickClosest<T extends { payPeriod?: { paydayDate: Date } }>(
-  txnDate: Date,
-  before: T | null,
-  after: T | null,
-): T | null {
-  if (!before) return after;
-  if (!after) return before;
-  const distBefore = Math.abs(txnDate.getTime() - (before as any).payPeriod.paydayDate.getTime());
-  const distAfter  = Math.abs(txnDate.getTime() - (after  as any).payPeriod.paydayDate.getTime());
-  return distBefore <= distAfter ? before : after;
-}
-
 // POST /api/transactions/rules/apply — run rules engine against transactions
 // Body (all optional):
 //   from, to: ISO date strings — restrict to transactions in this date range
@@ -693,62 +680,44 @@ router.post('/rules/apply', async (req: Request, res: Response) => {
       const match = await findAutoMatch(txn.description);
       if (!match) continue;
 
-      // No date window — the rule already identifies the target. Find the nearest
-      // unreconciled instance; if none exists (discretionary bill), create one.
+      // Match to the period that CONTAINS the transaction date — same logic as income.
+      // This ensures multiple transactions for the same bill/period aggregate into one
+      // instance rather than spilling into the next period (the old pickClosest bug).
       if (match.targetType === 'BILL') {
-        const [before, after] = await Promise.all([
-          prisma.billInstance.findFirst({
-            where: { billTemplateId: match.targetId, isReconciled: false, payPeriod: { paydayDate: { lte: txn.date } } },
-            orderBy: { payPeriod: { paydayDate: 'desc' } },
-            include: { payPeriod: true },
-          }),
-          prisma.billInstance.findFirst({
-            where: { billTemplateId: match.targetId, isReconciled: false, payPeriod: { paydayDate: { gt: txn.date } } },
-            orderBy: { payPeriod: { paydayDate: 'asc' } },
-            include: { payPeriod: true },
-          }),
-        ]);
+        const period = await prisma.payPeriod.findFirst({
+          where: { startDate: { lte: txn.date }, endDate: { gte: txn.date } },
+        }) ?? await prisma.payPeriod.findFirst({
+          where: { paydayDate: { gte: txn.date } }, orderBy: { paydayDate: 'asc' },
+        }) ?? await prisma.payPeriod.findFirst({ orderBy: { paydayDate: 'desc' } });
 
-        // Exclude closed-period instances from the candidate set before selecting
-        const filteredBefore = (before as any)?.payPeriod?.isClosed ? null : before;
-        const filteredAfter  = (after  as any)?.payPeriod?.isClosed ? null : after;
-        let inst = pickClosest(txn.date, filteredBefore, filteredAfter);
+        if (!period) continue;
+        if (period.isClosed) continue; // Never post to a closed period
 
-        if (!inst) {
-          // Discretionary bill — no instances exist; create one in the period containing the transaction
-          const template = await prisma.billTemplate.findUnique({ where: { id: match.targetId } });
-          const period = await prisma.payPeriod.findFirst({
-            where: { startDate: { lte: txn.date }, endDate: { gte: txn.date } },
-          }) ?? await prisma.payPeriod.findFirst({
-            where: { paydayDate: { gte: txn.date } }, orderBy: { paydayDate: 'asc' },
-          }) ?? await prisma.payPeriod.findFirst({ orderBy: { paydayDate: 'desc' } });
+        const template = await prisma.billTemplate.findUnique({ where: { id: match.targetId } });
+        if (!template) continue;
 
-          if (template && period && !period.isClosed) {
-            inst = await prisma.billInstance.upsert({
-              where: { payPeriodId_billTemplateId: { payPeriodId: period.id, billTemplateId: template.id } },
-              create: { payPeriodId: period.id, billTemplateId: template.id, projectedAmount: template.defaultAmount, isReconciled: false, isFrozen: false },
-              update: {},
-              include: { payPeriod: true },
-            });
-          }
-        }
+        // Upsert a single instance for this (period, template) pair — multiple transactions
+        // share one bucket, same as income entries.
+        const inst = await prisma.billInstance.upsert({
+          where: { payPeriodId_billTemplateId: { payPeriodId: period.id, billTemplateId: template.id } },
+          create: { payPeriodId: period.id, billTemplateId: template.id, projectedAmount: template.defaultAmount, isReconciled: false, isFrozen: false },
+          update: {},
+        });
 
-        if (inst) {
-          await prisma.transaction.update({
-            where: { id: txn.id },
-            data: { status: 'MATCHED', billInstanceId: inst.id },
-          });
-          const linkedBill = await prisma.transaction.findMany({
-            where: { billInstanceId: inst.id, status: 'MATCHED' },
-          });
-          const totalActual = linkedBill.reduce((sum: number, t: { amount: number }) => sum + Math.abs(t.amount), 0);
-          await prisma.billInstance.update({
-            where: { id: inst.id },
-            data: { isReconciled: true, actualAmount: totalActual, reconciledAt: inst.reconciledAt ?? new Date() },
-          });
-          affectedPeriodIds.add(inst.payPeriodId);
-          matchedCount++;
-        }
+        await prisma.transaction.update({
+          where: { id: txn.id },
+          data: { status: 'MATCHED', billInstanceId: inst.id },
+        });
+        const linkedBill = await prisma.transaction.findMany({
+          where: { billInstanceId: inst.id, status: 'MATCHED' },
+        });
+        const totalActual = linkedBill.reduce((sum: number, t: { amount: number }) => sum + Math.abs(t.amount), 0);
+        await prisma.billInstance.update({
+          where: { id: inst.id },
+          data: { isReconciled: true, actualAmount: totalActual, reconciledAt: inst.reconciledAt ?? new Date() },
+        });
+        affectedPeriodIds.add(inst.payPeriodId);
+        matchedCount++;
       } else {
         // Income: match to the period that CONTAINS the transaction date, not just nearest payday.
         // This ensures a transaction on Mar 11 lands in the Feb 26–Mar 11 period, not Mar 12.

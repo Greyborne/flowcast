@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import {
   useTransactions,
   useImportTransactions,
@@ -18,7 +18,8 @@ import {
 } from '../hooks/useTransactions';
 import { useBillTemplates } from '../hooks/useTemplates';
 import { useIncomeSources } from '../hooks/useTemplates';
-import type { Transaction, AutoMatchRule, MatchCandidate } from '../types';
+import { usePayPeriods } from '../hooks/usePayPeriods';
+import type { Transaction, AutoMatchRule, MatchCandidate, PayPeriod } from '../types';
 
 type Tab = 'inbox' | 'all' | 'history' | 'rules';
 type SortCol = 'date' | 'description' | 'amount' | 'status';
@@ -370,9 +371,11 @@ function ManualEntryModal({ onClose }: { onClose: () => void }) {
 function TransactionRow({
   txn,
   onMatch,
+  runningBalance,
 }: {
   txn: Transaction;
   onMatch: (txn: Transaction) => void;
+  runningBalance?: number;
 }) {
   const unmatch = useUnmatchTransaction();
   const ignore = useIgnoreTransaction();
@@ -398,6 +401,11 @@ function TransactionRow({
       <span className={`text-sm font-mono font-semibold w-24 text-right shrink-0 ${isExpense ? 'text-red-400' : 'text-green-400'}`}>
         {isExpense ? '-' : '+'}{fmt.format(Math.abs(txn.amount))}
       </span>
+      {runningBalance !== undefined && (
+        <span className={`text-sm font-mono w-28 text-right shrink-0 ${runningBalance < 0 ? 'text-red-400' : 'text-gray-300'}`}>
+          {fmt.format(runningBalance)}
+        </span>
+      )}
       <div className="w-28 flex items-center justify-end gap-1.5 shrink-0">
         {txn.status === 'UNMATCHED' && (
           <>
@@ -434,6 +442,7 @@ function TransactionList({
   sortCol,
   sortDir,
   onSort,
+  runningBalanceMap,
 }: {
   transactions: Transaction[];
   isLoading: boolean;
@@ -443,6 +452,7 @@ function TransactionList({
   sortCol: SortCol;
   sortDir: SortDir;
   onSort: (col: SortCol) => void;
+  runningBalanceMap?: Map<string, number>;
 }) {
   const [search, setSearch] = useState('');
 
@@ -451,10 +461,12 @@ function TransactionList({
     [transactions, search, sortCol, sortDir],
   );
 
+  const showBalance = !!runningBalanceMap;
+
   return (
-    <div>
-      {/* Toolbar: search + extra controls */}
-      <div className="flex items-center gap-3 mb-3">
+    <div className="h-full flex flex-col">
+      {/* Toolbar: search + extra controls — frozen */}
+      <div className="shrink-0 flex items-center gap-3 mb-3">
         <input
           type="text"
           value={search}
@@ -468,33 +480,39 @@ function TransactionList({
         {extraControls}
       </div>
 
-      {/* Column headers */}
-      <div className="flex items-center gap-3 px-0 pb-1.5 border-b border-gray-700 mb-1">
+      {/* Column headers — frozen */}
+      <div className="shrink-0 flex items-center gap-3 px-0 pb-1.5 border-b border-gray-700">
         <SortTh label="Date"        col="date"        active={sortCol} dir={sortDir} onSort={onSort} className="w-24 shrink-0" />
         <SortTh label="Description" col="description" active={sortCol} dir={sortDir} onSort={onSort} className="flex-1" />
         <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 shrink-0">Source</span>
         <SortTh label="Amount"      col="amount"      active={sortCol} dir={sortDir} onSort={onSort} className="w-24 shrink-0 justify-end" />
+        {showBalance && (
+          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 w-28 text-right shrink-0">Balance</span>
+        )}
         <SortTh label="Status"      col="status"      active={sortCol} dir={sortDir} onSort={onSort} className="w-28 shrink-0 justify-end" />
       </div>
 
-      {isLoading && <p className="text-sm text-gray-500 text-center py-8">Loading…</p>}
-      {!isLoading && visible.length === 0 && (
-        <div className="text-center py-12">
-          {search ? (
-            <p className="text-sm text-gray-500">No results for "{search}"</p>
-          ) : (
-            typeof emptyMessage === 'string'
-              ? <p className="text-sm text-gray-500">{emptyMessage}</p>
-              : emptyMessage
-          )}
-        </div>
-      )}
-      {visible.map((t) => (
-        <TransactionRow key={t.id} txn={t} onMatch={onMatch} />
-      ))}
-      {visible.length > 0 && visible.length !== transactions.length && (
-        <p className="text-xs text-gray-600 text-center pt-2">{visible.length} of {transactions.length} shown</p>
-      )}
+      {/* Scrollable rows */}
+      <div className="flex-1 min-h-0 overflow-y-auto pt-1">
+        {isLoading && <p className="text-sm text-gray-500 text-center py-8">Loading…</p>}
+        {!isLoading && visible.length === 0 && (
+          <div className="text-center py-12">
+            {search ? (
+              <p className="text-sm text-gray-500">No results for "{search}"</p>
+            ) : (
+              typeof emptyMessage === 'string'
+                ? <p className="text-sm text-gray-500">{emptyMessage}</p>
+                : emptyMessage
+            )}
+          </div>
+        )}
+        {visible.map((t) => (
+          <TransactionRow key={t.id} txn={t} onMatch={onMatch} runningBalance={runningBalanceMap?.get(t.id)} />
+        ))}
+        {visible.length > 0 && visible.length !== transactions.length && (
+          <p className="text-xs text-gray-600 text-center pt-2">{visible.length} of {transactions.length} shown</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -528,44 +546,309 @@ function InboxTab({
   );
 }
 
-// ── All Transactions Tab ──────────────────────────────────────────────────────
+// ── Period Break Row ──────────────────────────────────────────────────────────
 
-function AllTab({
-  onMatch, sortCol, sortDir, onSort,
+function PeriodBreakRow({
+  period,
+  txns,
+  runningBalanceMap,
+  onRefReady,
 }: {
-  onMatch: (txn: Transaction) => void;
-  sortCol: SortCol; sortDir: SortDir; onSort: (col: SortCol) => void;
+  period: PayPeriod;
+  txns: Transaction[];
+  runningBalanceMap: Map<string, number>;
+  onRefReady: (el: HTMLDivElement | null) => void;
 }) {
-  const [statusFilter, setStatusFilter] = useState('');
-  const { data, isLoading } = useTransactions({ status: statusFilter || undefined, limit: 1000 });
-  const transactions = data?.transactions ?? [];
+  const incomeTotal = txns.reduce((s, t) => t.amount > 0 ? s + t.amount : s, 0);
+  const expenseTotal = txns.reduce((s, t) => t.amount < 0 ? s + Math.abs(t.amount) : s, 0);
+  const fmtShort = (d: string) =>
+    new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 
-  const statusPills = (
-    <div className="flex items-center gap-1.5 shrink-0">
-      {['', 'UNMATCHED', 'MATCHED', 'IGNORED'].map((s) => (
-        <button key={s} onClick={() => setStatusFilter(s)}
-          className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-            statusFilter === s
-              ? 'bg-blue-700 border-blue-600 text-white'
-              : 'border-gray-700 text-gray-400 hover:text-white hover:border-gray-600'
-          }`}>
-          {s || 'All'}
-        </button>
-      ))}
-      <span className="text-xs text-gray-600 ml-1">{data?.total ?? 0}</span>
-    </div>
-  );
+  // Closing balance = running balance after the last transaction in this period
+  const lastTxn = [...txns].sort((a, b) => {
+    const d = a.date.localeCompare(b.date);
+    if (d !== 0) return d;
+    return (a.amount < 0 ? 1 : 0) - (b.amount < 0 ? 1 : 0);
+  }).at(-1);
+  const closingBalance = lastTxn ? runningBalanceMap.get(lastTxn.id) : undefined;
+
+  const predicted = period.balanceSnapshot?.totalExpenses ?? 0;
+  const matched = txns
+    .filter(t => t.status === 'MATCHED' && t.amount < 0)
+    .reduce((s, t) => s + Math.abs(t.amount), 0);
+  const diff = predicted - matched;
 
   return (
-    <TransactionList
-      transactions={transactions}
-      isLoading={isLoading}
-      onMatch={onMatch}
-      sortCol={sortCol}
-      sortDir={sortDir}
-      onSort={onSort}
-      extraControls={statusPills}
-    />
+    <div
+      ref={onRefReady}
+      className={`flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2 rounded-lg my-2 text-xs ${
+        period.isClosed
+          ? 'bg-gray-800 border border-gray-700'
+          : 'bg-blue-950/60 border border-blue-900/50'
+      }`}
+    >
+      <div className="flex items-center gap-2 shrink-0">
+        <span className="font-semibold text-gray-200">
+          {fmtShort(period.startDate)} – {fmtShort(period.endDate)}
+        </span>
+        <span className="text-gray-500">Payday {fmtDate(period.paydayDate)}</span>
+        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+          period.isClosed ? 'bg-gray-700 text-gray-400' : 'bg-blue-900/60 text-blue-300'
+        }`}>
+          {period.isClosed ? 'Closed' : 'Open'}
+        </span>
+      </div>
+
+      <div className="flex-1" />
+
+      <div className="flex items-center gap-4 shrink-0 flex-wrap">
+        <span className="text-gray-500">
+          Income: <span className="text-green-400 font-mono font-semibold">{fmt.format(incomeTotal)}</span>
+        </span>
+        <span className="text-gray-500">
+          Expenses: <span className="text-red-400 font-mono font-semibold">{fmt.format(expenseTotal)}</span>
+        </span>
+        {period.isClosed ? (
+          closingBalance !== undefined && (
+            <span className="text-gray-500">
+              Balance:{' '}
+              <span className={`font-mono font-semibold ${closingBalance < 0 ? 'text-red-400' : 'text-gray-200'}`}>
+                {fmt.format(closingBalance)}
+              </span>
+            </span>
+          )
+        ) : (
+          <>
+            <span className="text-gray-500">
+              Predicted: <span className="font-mono text-gray-300">{fmt.format(predicted)}</span>
+            </span>
+            <span className="text-gray-500">
+              Matched: <span className="font-mono text-gray-300">{fmt.format(matched)}</span>
+            </span>
+            <span className="text-gray-500">
+              Diff:{' '}
+              <span className={`font-mono font-semibold ${diff > 0.005 ? 'text-amber-400' : 'text-green-400'}`}>
+                {diff >= 0 ? '+' : ''}{fmt.format(diff)}
+              </span>
+            </span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── All Transactions Tab ──────────────────────────────────────────────────────
+
+function AllTab({ onMatch }: { onMatch: (txn: Transaction) => void }) {
+  const [statusFilter, setStatusFilter] = useState('');
+  const [sortCol, setSortCol] = useState<SortCol>('date');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const [search, setSearch] = useState('');
+  const [navIndex, setNavIndex] = useState(0);
+
+  const { data, isLoading } = useTransactions({ limit: 5000 });
+  const allTransactions = data?.transactions ?? [];
+  const { data: periods = [] } = usePayPeriods();
+
+  const sortedPeriods = useMemo(
+    () => [...periods].sort((a, b) => a.paydayDate.localeCompare(b.paydayDate)),
+    [periods],
+  );
+
+  // Running balance map anchored at earliest period's openingBalance
+  const runningBalanceMap = useMemo(() => {
+    const map = new Map<string, number>();
+    if (allTransactions.length === 0) return map;
+    const anchor = sortedPeriods.length > 0 ? sortedPeriods[0].openingBalance : 0;
+    const sorted = [...allTransactions].sort((a, b) => {
+      const d = a.date.localeCompare(b.date);
+      if (d !== 0) return d;
+      return (a.amount < 0 ? 1 : 0) - (b.amount < 0 ? 1 : 0);
+    });
+    let running = anchor;
+    for (const txn of sorted) {
+      running += txn.amount;
+      map.set(txn.id, running);
+    }
+    return map;
+  }, [allTransactions, sortedPeriods]);
+
+  // All transactions grouped by pay period (preserving period order)
+  const periodGroups = useMemo(() => {
+    const groups = new Map<string, { period: PayPeriod; txns: Transaction[] }>();
+    for (const p of sortedPeriods) groups.set(p.id, { period: p, txns: [] });
+    for (const txn of allTransactions) {
+      const p = sortedPeriods.find(p => p.startDate <= txn.date && txn.date <= p.endDate);
+      if (p) groups.get(p.id)!.txns.push(txn);
+    }
+    return sortedPeriods.map(p => groups.get(p.id)!).filter(g => g.txns.length > 0);
+  }, [allTransactions, sortedPeriods]);
+
+  // Refs for period break rows (scroll targets)
+  const periodRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // Index of first unclosed period in periodGroups
+  const currentPeriodIdx = useMemo(() => {
+    const idx = periodGroups.findIndex(g => !g.period.isClosed);
+    return idx === -1 ? Math.max(0, periodGroups.length - 1) : idx;
+  }, [periodGroups]);
+
+  // Init navIndex to current period once data loads
+  useEffect(() => {
+    if (periodGroups.length === 0) return;
+    setNavIndex(currentPeriodIdx);
+  }, [periodGroups.length, currentPeriodIdx]);
+
+  function scrollToPeriod(idx: number) {
+    const clamped = Math.max(0, Math.min(periodGroups.length - 1, idx));
+    setNavIndex(clamped);
+    periodRefs.current.get(periodGroups[clamped].period.id)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function handleSort(col: SortCol) {
+    if (col === sortCol) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('asc'); }
+  }
+
+  const showBreakRows = statusFilter === '';
+
+  // Break-row mode: search+sort within each period group (totals always use original txns)
+  const visibleGroups = useMemo(() => {
+    if (!showBreakRows) return [];
+    return periodGroups
+      .map(g => ({ ...g, txns: filterAndSort(g.txns, search, sortCol, sortDir) }))
+      .filter(g => g.txns.length > 0);
+  }, [periodGroups, search, sortCol, sortDir, showBreakRows]);
+
+  // Flat mode: status filter + search + sort
+  const visibleFlat = useMemo(() => {
+    if (showBreakRows) return [];
+    return filterAndSort(allTransactions.filter(t => t.status === statusFilter), search, sortCol, sortDir);
+  }, [allTransactions, statusFilter, search, sortCol, sortDir, showBreakRows]);
+
+  const filteredCount = showBreakRows
+    ? allTransactions.length
+    : allTransactions.filter(t => t.status === statusFilter).length;
+
+  return (
+    <div className="h-full flex flex-col">
+      {/* Toolbar — frozen */}
+      <div className="shrink-0 flex items-center gap-3 mb-3">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search description, memo, or matched name…"
+          className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500"
+        />
+        {search && (
+          <button onClick={() => setSearch('')} className="text-xs text-gray-500 hover:text-white">Clear</button>
+        )}
+        {/* Period navigation — only visible when break rows are shown */}
+        {showBreakRows && periodGroups.length > 0 && (
+          <div className="flex items-center rounded-lg overflow-hidden border border-gray-700 shrink-0">
+            <button
+              onClick={() => scrollToPeriod(navIndex - 1)}
+              disabled={navIndex <= 0}
+              className="px-2 py-1 text-xs text-gray-400 hover:text-white hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="Back in time (older period)"
+            >←</button>
+            <button
+              onClick={() => scrollToPeriod(currentPeriodIdx)}
+              className="px-2.5 py-1 text-xs text-blue-400 hover:text-blue-300 hover:bg-gray-700 border-x border-gray-700 transition-colors"
+              title="Jump to current (first open) period"
+            >Current</button>
+            <button
+              onClick={() => scrollToPeriod(navIndex + 1)}
+              disabled={navIndex >= periodGroups.length - 1}
+              className="px-2 py-1 text-xs text-gray-400 hover:text-white hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="Forward in time (newer period)"
+            >→</button>
+          </div>
+        )}
+        {/* Status pills */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {['', 'UNMATCHED', 'MATCHED', 'IGNORED'].map((s) => (
+            <button key={s} onClick={() => setStatusFilter(s)}
+              className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                statusFilter === s
+                  ? 'bg-blue-700 border-blue-600 text-white'
+                  : 'border-gray-700 text-gray-400 hover:text-white hover:border-gray-600'
+              }`}>
+              {s || 'All'}
+            </button>
+          ))}
+          <span className="text-xs text-gray-600 ml-1">{data?.total ?? 0}</span>
+        </div>
+      </div>
+
+      {/* Column headers — frozen */}
+      <div className="shrink-0 flex items-center gap-3 px-0 pb-1.5 border-b border-gray-700">
+        <SortTh label="Date"        col="date"        active={sortCol} dir={sortDir} onSort={handleSort} className="w-24 shrink-0" />
+        <SortTh label="Description" col="description" active={sortCol} dir={sortDir} onSort={handleSort} className="flex-1" />
+        <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 shrink-0">Source</span>
+        <SortTh label="Amount"      col="amount"      active={sortCol} dir={sortDir} onSort={handleSort} className="w-24 shrink-0 justify-end" />
+        <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 w-28 text-right shrink-0">Balance</span>
+        <SortTh label="Status"      col="status"      active={sortCol} dir={sortDir} onSort={handleSort} className="w-28 shrink-0 justify-end" />
+      </div>
+
+      {/* Scrollable rows */}
+      <div className="flex-1 min-h-0 overflow-y-auto pt-1">
+        {isLoading && <p className="text-sm text-gray-500 text-center py-8">Loading…</p>}
+
+        {/* Break-row mode */}
+        {!isLoading && showBreakRows && (
+          <>
+            {visibleGroups.length === 0 && search && (
+              <p className="text-sm text-gray-500 text-center py-12">No results for "{search}"</p>
+            )}
+            {visibleGroups.map(vg => {
+              const origGroup = periodGroups.find(g => g.period.id === vg.period.id)!;
+              return (
+                <div key={vg.period.id}>
+                  <PeriodBreakRow
+                    period={vg.period}
+                    txns={origGroup.txns}
+                    runningBalanceMap={runningBalanceMap}
+                    onRefReady={el => {
+                      if (el) periodRefs.current.set(vg.period.id, el);
+                      else periodRefs.current.delete(vg.period.id);
+                    }}
+                  />
+                  {vg.txns.map(t => (
+                    <TransactionRow key={t.id} txn={t} onMatch={onMatch} runningBalance={runningBalanceMap.get(t.id)} />
+                  ))}
+                </div>
+              );
+            })}
+          </>
+        )}
+
+        {/* Flat filtered mode */}
+        {!isLoading && !showBreakRows && (
+          <>
+            {visibleFlat.length === 0 && (
+              <div className="text-center py-12">
+                {search
+                  ? <p className="text-sm text-gray-500">No results for "{search}"</p>
+                  : <p className="text-sm text-gray-500">No transactions</p>
+                }
+              </div>
+            )}
+            {visibleFlat.map(t => (
+              <TransactionRow key={t.id} txn={t} onMatch={onMatch} runningBalance={runningBalanceMap.get(t.id)} />
+            ))}
+            {visibleFlat.length > 0 && visibleFlat.length !== filteredCount && (
+              <p className="text-xs text-gray-600 text-center pt-2">
+                {visibleFlat.length} of {filteredCount} shown
+              </p>
+            )}
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -576,7 +859,7 @@ function HistoryTab() {
   const deleteBatch = useDeleteImportBatch();
 
   return (
-    <div>
+    <div className="h-full overflow-y-auto">
       {isLoading && <p className="text-sm text-gray-500 text-center py-8">Loading…</p>}
       {!isLoading && batches.length === 0 && (
         <p className="text-sm text-gray-500 text-center py-8">No imports yet</p>
@@ -881,7 +1164,7 @@ function RulesTab() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="h-full overflow-y-auto space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-400">
           Rules are applied on import to automatically match transactions. Higher priority = evaluated first.
@@ -1029,7 +1312,7 @@ export default function TransactionsPage() {
   ];
 
   return (
-    <div className="max-w-5xl mx-auto space-y-4">
+    <div className="max-w-5xl mx-auto h-full flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold text-white">Transactions</h2>
@@ -1067,8 +1350,8 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-        <div className="flex border-b border-gray-800">
+      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex-1 min-h-0 flex flex-col">
+        <div className="shrink-0 flex border-b border-gray-800">
           {tabs.map((t) => (
             <button key={t.key} onClick={() => setTab(t.key)}
               className={`px-4 py-3 text-sm font-medium flex items-center gap-2 border-b-2 transition-colors ${
@@ -1083,9 +1366,9 @@ export default function TransactionsPage() {
             </button>
           ))}
         </div>
-        <div className="p-4">
+        <div className="flex-1 min-h-0 overflow-hidden p-4 flex flex-col">
           {tab === 'inbox'   && <InboxTab onMatch={setMatchTarget} sortCol={sortCol} sortDir={sortDir} onSort={handleSort} />}
-          {tab === 'all'     && <AllTab   onMatch={setMatchTarget} sortCol={sortCol} sortDir={sortDir} onSort={handleSort} />}
+          {tab === 'all'     && <AllTab   onMatch={setMatchTarget} />}
           {tab === 'history' && <HistoryTab />}
           {tab === 'rules'   && <RulesTab />}
         </div>

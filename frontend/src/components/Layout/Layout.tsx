@@ -7,9 +7,9 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100">
+    <div className="h-screen flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
       {/* ── Header ── */}
-      <header className="bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between">
+      <header className="shrink-0 bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-8">
           <div>
             <h1 className="text-xl font-bold text-white tracking-tight">
@@ -66,7 +66,7 @@ export default function Layout({ children }: LayoutProps) {
       </header>
 
       {/* ── Main Content ── */}
-      <main className="p-6">
+      <main className="flex-1 min-h-0 overflow-hidden p-6">
         {children}
       </main>
     </div>
