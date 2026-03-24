@@ -166,7 +166,11 @@ export async function computePeriodProjection(
   }));
 
   // ── Bills ─────────────────────────────────────────────────────────────────
-  const billProjections: BillProjection[] = payPeriod.billInstances.map((instance) => ({
+  // Exclude unreconciled instances of archived templates — they won't be paid.
+  // Reconciled instances are always included regardless of template status (actual money was spent).
+  const billProjections: BillProjection[] = payPeriod.billInstances
+    .filter((instance) => instance.isReconciled || instance.billTemplate.isActive)
+    .map((instance) => ({
     billInstanceId: instance.id,
     billTemplateId: instance.billTemplateId,
     name: instance.billTemplate.name,

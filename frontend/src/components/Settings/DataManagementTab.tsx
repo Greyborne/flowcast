@@ -556,6 +556,22 @@ export default function DataManagementTab() {
   const [regenResult,     setRegenResult]     = useState<string | null>(null);
   const [error,           setError]           = useState<string | null>(null);
   const [clearedPeriods,  setClearedPeriods]  = useState(false);
+  const [recalculating,   setRecalculating]   = useState(false);
+  const [recalcResult,    setRecalcResult]    = useState<string | null>(null);
+
+  async function handleRecalculate() {
+    setRecalculating(true);
+    setRecalcResult(null);
+    try {
+      const { data } = await axios.post(`${API}/api/pay-periods/recompute-all`);
+      setRecalcResult(`Recalculated ${data.recomputed} balance snapshot${data.recomputed !== 1 ? 's' : ''}.`);
+      await qc.invalidateQueries({ queryKey: ['payPeriods'] });
+    } catch (err: any) {
+      setRecalcResult('Recalculation failed: ' + (err.response?.data?.error ?? err.message));
+    } finally {
+      setRecalculating(false);
+    }
+  }
 
   const toggle = (id: ClearTarget) =>
     setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -679,7 +695,7 @@ export default function DataManagementTab() {
       )}
 
       {/* ── Action buttons ── */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <button
           onClick={() => { setShowConfirm(true); setConfirmText(''); setResult(null); setError(null); setClearedPeriods(false); setRegenResult(null); }}
           disabled={selected.size === 0}
@@ -694,7 +710,20 @@ export default function DataManagementTab() {
         >
           Regenerate Projections
         </button>
+        <span className="text-gray-700">·</span>
+        <button
+          onClick={handleRecalculate}
+          disabled={recalculating}
+          className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-sm rounded-lg transition-colors border border-gray-700 disabled:opacity-40"
+        >
+          {recalculating ? 'Recalculating…' : '⟳ Recalculate Balances'}
+        </button>
       </div>
+      {recalcResult && (
+        <p className={`text-xs px-3 py-2 rounded border ${recalcResult.startsWith('Recalculated') ? 'text-green-300 bg-green-950/30 border-green-800/40' : 'text-red-400 bg-red-950/30 border-red-800/40'}`}>
+          {recalcResult}
+        </p>
+      )}
 
       {/* ── Delete confirmation modal ── */}
       {showConfirm && (

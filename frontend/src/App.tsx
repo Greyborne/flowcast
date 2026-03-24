@@ -60,9 +60,11 @@ function AppContent() {
     <Layout>
       <Routes>
         <Route path="/" element={
-          <div className="h-full overflow-y-auto">
+          <div className="h-full flex flex-col gap-4">
             <BalanceHeader />
-            <ProjectionGrid />
+            <div className="flex-1 min-h-0">
+              <ProjectionGrid />
+            </div>
           </div>
         } />
         <Route path="/transactions" element={<TransactionsPage />} />

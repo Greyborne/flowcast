@@ -336,6 +336,15 @@ router.patch('/:id/archive', async (req: Request, res: Response) => {
       where: { id: req.params.id },
       data: { isActive: false },
     });
+    // Recompute from the earliest period that has an instance of this template
+    const earliest = await prisma.billInstance.findFirst({
+      where: { billTemplateId: bill.id },
+      orderBy: { payPeriod: { paydayDate: 'asc' } },
+    });
+    if (earliest) {
+      const affectedIds = await recomputeFromPeriod(earliest.payPeriodId);
+      broadcast({ type: 'BALANCE_UPDATE', payPeriodIds: affectedIds });
+    }
     res.json(bill);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -349,6 +358,15 @@ router.patch('/:id/restore', async (req: Request, res: Response) => {
       where: { id: req.params.id },
       data: { isActive: true },
     });
+    // Recompute from the earliest period that has an instance of this template
+    const earliest = await prisma.billInstance.findFirst({
+      where: { billTemplateId: bill.id },
+      orderBy: { payPeriod: { paydayDate: 'asc' } },
+    });
+    if (earliest) {
+      const affectedIds = await recomputeFromPeriod(earliest.payPeriodId);
+      broadcast({ type: 'BALANCE_UPDATE', payPeriodIds: affectedIds });
+    }
     res.json(bill);
   } catch (err: any) {
     res.status(400).json({ error: err.message });

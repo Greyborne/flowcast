@@ -81,9 +81,9 @@ export default function ProjectionGrid() {
     setSelectedPeriodId((cur) => (cur === id ? null : id));
 
   return (
-    <div className="relative">
+    <div className="h-full flex flex-col">
       {/* ── Toolbar ── */}
-      <div className="flex items-center justify-between mb-3">
+      <div className="shrink-0 flex items-center justify-between mb-3">
         <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
           2-Year Cash Flow Projection
         </h2>
@@ -93,7 +93,7 @@ export default function ProjectionGrid() {
       </div>
 
       {/* ── Grid ── */}
-      <div className="overflow-auto rounded-xl border border-gray-800 max-h-[calc(100vh-260px)]">
+      <div className="flex-1 min-h-0 overflow-auto rounded-xl border border-gray-800">
         <table className="min-w-full text-sm">
 
           {/* ── Date header row — sticky top ── */}

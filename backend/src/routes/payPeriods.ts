@@ -5,6 +5,19 @@ import { broadcast } from '../websocket/wsServer';
 
 const router = Router();
 
+// POST /api/pay-periods/recompute-all — recompute all balance snapshots from scratch
+router.post('/recompute-all', async (_req: Request, res: Response) => {
+  try {
+    const firstPeriod = await prisma.payPeriod.findFirst({ orderBy: { paydayDate: 'asc' } });
+    if (!firstPeriod) return res.json({ recomputed: 0 });
+    const affected = await recomputeFromPeriod(firstPeriod.id);
+    broadcast({ type: 'BALANCE_UPDATE', payPeriodIds: affected });
+    res.json({ recomputed: affected.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/pay-periods — list all pay periods with balance snapshots
 router.get('/', async (_req: Request, res: Response) => {
   try {
@@ -45,7 +58,7 @@ router.get('/:id/close-preview', async (req: Request, res: Response) => {
         where: { id: req.params.id },
         include: {
           billInstances: {
-            include: { billTemplate: { select: { id: true, name: true, group: true, isDiscretionary: true, dueDayOfMonth: true, defaultAmount: true } } },
+            include: { billTemplate: { select: { id: true, name: true, group: true, isDiscretionary: true, isActive: true, dueDayOfMonth: true, defaultAmount: true } } },
           },
           incomeEntries: {
             include: { incomeSource: { select: { id: true, name: true } } },
@@ -73,10 +86,10 @@ router.get('/:id/close-preview', async (req: Request, res: Response) => {
         .filter((e) => e.isReconciled)
         .map((e) => ({ id: e.id, name: e.incomeSource.name, actualAmount: e.actualAmount })),
       fixedToReconcile: period.billInstances
-        .filter((i) => !i.isReconciled && !i.billTemplate.isDiscretionary && i.billTemplate.dueDayOfMonth !== null)
+        .filter((i) => !i.isReconciled && i.billTemplate.isActive && !i.billTemplate.isDiscretionary && i.billTemplate.dueDayOfMonth !== null)
         .map((i) => ({ id: i.id, name: i.billTemplate.name, group: i.billTemplate.group, projectedAmount: i.projectedAmount })),
       fixedReconciled: period.billInstances
-        .filter((i) => i.isReconciled && !i.billTemplate.isDiscretionary && i.billTemplate.dueDayOfMonth !== null)
+        .filter((i) => i.isReconciled && i.billTemplate.isActive && !i.billTemplate.isDiscretionary && i.billTemplate.dueDayOfMonth !== null)
         .map((i) => ({ id: i.id, name: i.billTemplate.name, group: i.billTemplate.group, actualAmount: i.actualAmount })),
       // Discretionary: templates not yet in this period, plus already-reconciled instances
       discretionaryTemplates: discretionaryTemplates
@@ -127,9 +140,9 @@ router.post('/:id/close', async (req: Request, res: Response) => {
       }
     }
 
-    // 2. Auto-reconcile all unreconciled fixed bill instances at projected amount
+    // 2. Auto-reconcile all unreconciled fixed bill instances at projected amount (skip archived templates)
     const fixedUnreconciled = period.billInstances.filter(
-      (i) => !i.isReconciled && !i.billTemplate.isDiscretionary && i.billTemplate.dueDayOfMonth !== null,
+      (i) => !i.isReconciled && i.billTemplate.isActive && !i.billTemplate.isDiscretionary && i.billTemplate.dueDayOfMonth !== null,
     );
     for (const inst of fixedUnreconciled) {
       await prisma.billInstance.update({
