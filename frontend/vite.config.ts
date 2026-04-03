@@ -9,6 +9,7 @@ export default defineConfig({
     watch: {
       usePolling: true,
     },
+    allowedHosts: ['dockerdev.chazwall.lan'],
     proxy: {
       '/api': {
         target: 'http://backend:3001',
