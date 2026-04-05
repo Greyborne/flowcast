@@ -125,8 +125,14 @@ router.post('/regenerate-periods', async (req: Request, res: Response) => {
           data: toCreate.map((p) => ({ accountId, paydayDate: p.paydayDate, startDate: p.startDate, endDate: p.endDate, openingBalance: 0 })),
         });
         created = toCreate.length;
-        await populateNewMonthlyPeriods(toCreate, accountId);
       }
+      // Always populate ALL current periods (upsert skips already-populated rows)
+      const allCurrentPeriods = await prisma.payPeriod.findMany({
+        where: { accountId },
+        orderBy: { paydayDate: 'asc' },
+        select: { startDate: true, endDate: true, paydayDate: true },
+      });
+      await populateNewMonthlyPeriods(allCurrentPeriods, accountId);
     } else {
       const toCreateDates = schedule.filter((d) => !existingDates.has(d.toISOString()));
       const periodLength = getPeriodLengthDays(frequency);
@@ -141,8 +147,14 @@ router.post('/regenerate-periods', async (req: Request, res: Response) => {
           })),
         });
         created = toCreateDates.length;
-        await populateNewPeriods(toCreateDates, periodLength, accountId);
       }
+      // Always populate ALL current periods (upsert skips already-populated rows)
+      const allCurrentPaydays = (await prisma.payPeriod.findMany({
+        where: { accountId },
+        orderBy: { paydayDate: 'asc' },
+        select: { paydayDate: true },
+      })).map((p) => p.paydayDate);
+      await populateNewPeriods(allCurrentPaydays, periodLength, accountId);
     }
 
     // Set opening balance on the earliest unreconciled period
