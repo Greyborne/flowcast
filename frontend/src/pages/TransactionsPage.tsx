@@ -123,15 +123,14 @@ function MatchPicker({
 
   function selectCandidate(c: MatchCandidate) {
     setPendingCandidate(c);
-    const absAmount = Math.abs(transaction.amount);
     setRuleForm({
       pattern: transaction.description,
       matchType: 'CONTAINS',
       targetType: c.type,
       targetId: c.templateId,
       priority: 0,
-      amountOperator: 'EXACT',
-      amountValue: absAmount > 0 ? String(absAmount) : '',
+      amountOperator: null,
+      amountValue: '',
       amountValue2: '',
     });
   }
