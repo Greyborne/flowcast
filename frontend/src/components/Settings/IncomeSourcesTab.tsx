@@ -41,11 +41,16 @@ function EditForm({ initial, sources, currentPosition, isNew = false, isMonthlyA
     positionAfterId: currentPosition !== undefined ? currentPosition : '__last__',
   });
   const [cascadeDefault, setCascadeDefault] = useState(false);
+  // Keep a raw string for the amount input so typing "2208." doesn't strip the decimal
+  const [amountStr, setAmountStr] = useState(String(initial.defaultAmount));
   const set = (patch: Partial<IncomeSourceForm>) => setForm((f) => ({ ...f, ...patch }));
 
   const originalAmount = initial.defaultAmount;
 
-  const handleAmountChange = (val: number) => {
+  const handleAmountChange = (raw: string) => {
+    setAmountStr(raw);
+    const parsed = parseFloat(raw);
+    const val = isNaN(parsed) ? 0 : parsed;
     set({ defaultAmount: val });
     // Auto-check cascade when amount differs from original (only when editing, not creating)
     if (!isNew) setCascadeDefault(val !== originalAmount);
@@ -149,8 +154,8 @@ function EditForm({ initial, sources, currentPosition, isNew = false, isMonthlyA
           <input
             type="text"
             inputMode="decimal"
-            value={form.defaultAmount}
-            onChange={(e) => handleAmountChange(parseFloat(e.target.value) || 0)}
+            value={amountStr}
+            onChange={(e) => handleAmountChange(e.target.value)}
             className="w-full bg-gray-800 border border-gray-700 rounded pl-5 pr-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
           />
         </div>
