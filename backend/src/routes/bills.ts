@@ -190,6 +190,39 @@ router.post('/', async (req: Request, res: Response) => {
     });
     await reorderGroup(bill.id, bill.group, req.accountId, positionAfterId !== undefined ? positionAfterId : bill.id);
     const updated = await prisma.billTemplate.findUniqueOrThrow({ where: { id: bill.id } });
+
+    // Backfill BillInstance records for all existing periods
+    if (updated.isActive && updated.dueDayOfMonth != null) {
+      const { billFallsInPeriod } = await import('../services/projectionEngine');
+      const periods = await prisma.payPeriod.findMany({
+        where: { accountId: req.accountId },
+        orderBy: { paydayDate: 'asc' },
+      });
+      let firstPeriodId: string | null = null;
+      for (const period of periods) {
+        const start = new Date(period.startDate);
+        const end = new Date(period.endDate);
+        if (!billFallsInPeriod(updated.dueDayOfMonth, start, end)) continue;
+        await prisma.billInstance.upsert({
+          where: { payPeriodId_billTemplateId: { payPeriodId: period.id, billTemplateId: updated.id } },
+          create: {
+            accountId: req.accountId,
+            billTemplateId: updated.id,
+            payPeriodId: period.id,
+            projectedAmount: updated.defaultAmount,
+            isReconciled: false,
+            isFrozen: false,
+          },
+          update: {},
+        });
+        if (!firstPeriodId) firstPeriodId = period.id;
+      }
+      if (firstPeriodId) {
+        const affectedIds = await recomputeFromPeriod(firstPeriodId);
+        broadcast({ type: 'BALANCE_UPDATE', payPeriodIds: affectedIds });
+      }
+    }
+
     res.status(201).json(updated);
   } catch (err: any) { res.status(400).json({ error: err.message }); }
 });
