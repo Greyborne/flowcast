@@ -112,6 +112,14 @@ async function runMigrations() {
     console.log('🔧 Migration v2c: added expectedDayOfMonth to IncomeSource');
   } catch { /* already exists */ }
 
+  // v2e: Add amount filter columns to AutoMatchRule
+  try {
+    await prisma.$executeRaw`ALTER TABLE "AutoMatchRule" ADD COLUMN "amountOperator" TEXT`;
+    await prisma.$executeRaw`ALTER TABLE "AutoMatchRule" ADD COLUMN "amountValue" REAL`;
+    await prisma.$executeRaw`ALTER TABLE "AutoMatchRule" ADD COLUMN "amountValue2" REAL`;
+    console.log('🔧 Migration v2e: added amountOperator/amountValue/amountValue2 to AutoMatchRule');
+  } catch { /* already exists */ }
+
   // v2d: Migrate AppSetting keys to account-prefixed format (e.g. "billGroups" → "personal:billGroups")
   // Only migrates keys that don't already contain a colon (not yet prefixed).
   try {

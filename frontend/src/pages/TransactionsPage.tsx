@@ -903,9 +903,15 @@ type RuleForm = {
   targetType: AutoMatchRule['targetType'];
   targetId: string;
   priority: number;
+  amountOperator: AutoMatchRule['amountOperator'];
+  amountValue: string;   // kept as string so input doesn't strip decimals mid-type
+  amountValue2: string;
 };
 
-const emptyRuleForm: RuleForm = { pattern: '', matchType: 'CONTAINS', targetType: 'BILL', targetId: '', priority: 0 };
+const emptyRuleForm: RuleForm = {
+  pattern: '', matchType: 'CONTAINS', targetType: 'BILL', targetId: '', priority: 0,
+  amountOperator: null, amountValue: '', amountValue2: '',
+};
 
 // ── Regex Builder ─────────────────────────────────────────────────────────────
 
@@ -1119,6 +1125,53 @@ function RuleFormFields({
         <input type="number" value={form.priority} onChange={(e) => onChange({ ...form, priority: parseInt(e.target.value) || 0 })}
           className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono" />
       </div>
+
+      {/* Amount filter — spans full width */}
+      <div className="col-span-2 border-t border-gray-700 pt-3">
+        <label className="block text-xs text-gray-400 mb-2">Amount Filter <span className="text-gray-600">(optional — leave blank to match any amount)</span></label>
+        <div className="flex gap-2 items-center flex-wrap">
+          <select
+            value={form.amountOperator ?? ''}
+            onChange={(e) => onChange({ ...form, amountOperator: (e.target.value || null) as AutoMatchRule['amountOperator'], amountValue: '', amountValue2: '' })}
+            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
+          >
+            <option value="">Any amount</option>
+            <option value="EXACT">Exactly</option>
+            <option value="LT">Less than</option>
+            <option value="LTE">Less than or equal</option>
+            <option value="GT">Greater than</option>
+            <option value="GTE">Greater than or equal</option>
+            <option value="BETWEEN">Between</option>
+          </select>
+
+          {form.amountOperator && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500">$</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={form.amountValue}
+                onChange={(e) => onChange({ ...form, amountValue: e.target.value })}
+                placeholder="0.00"
+                className="w-28 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono"
+              />
+              {form.amountOperator === 'BETWEEN' && (
+                <>
+                  <span className="text-xs text-gray-500">and $</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={form.amountValue2}
+                    onChange={(e) => onChange({ ...form, amountValue2: e.target.value })}
+                    placeholder="0.00"
+                    className="w-28 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono"
+                  />
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1141,7 +1194,11 @@ function RulesTab() {
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (!form.pattern || !form.targetId) return;
-    await createRule.mutateAsync(form);
+    await createRule.mutateAsync({
+      ...form,
+      amountValue: form.amountValue ? parseFloat(form.amountValue) : null,
+      amountValue2: form.amountValue2 ? parseFloat(form.amountValue2) : null,
+    });
     setForm(emptyRuleForm);
     setShowForm(false);
     const result = await applyRules.mutateAsync();
@@ -1161,13 +1218,21 @@ function RulesTab() {
       targetType: rule.targetType,
       targetId: rule.targetId,
       priority: rule.priority,
+      amountOperator: rule.amountOperator,
+      amountValue: rule.amountValue != null ? String(rule.amountValue) : '',
+      amountValue2: rule.amountValue2 != null ? String(rule.amountValue2) : '',
     });
   }
 
   async function handleSaveEdit(e: React.FormEvent) {
     e.preventDefault();
     if (!editingId || !editForm.pattern || !editForm.targetId) return;
-    await updateRule.mutateAsync({ id: editingId, ...editForm });
+    await updateRule.mutateAsync({
+      id: editingId,
+      ...editForm,
+      amountValue: editForm.amountValue ? parseFloat(editForm.amountValue) : null,
+      amountValue2: editForm.amountValue2 ? parseFloat(editForm.amountValue2) : null,
+    });
     setEditingId(null);
   }
 
@@ -1253,7 +1318,19 @@ function RulesTab() {
                   </span>
                   <span className="text-sm text-gray-300">{target ?? rule.targetId}</span>
                 </div>
-                <p className="text-xs text-gray-600 mt-0.5">Priority {rule.priority}</p>
+                <p className="text-xs text-gray-600 mt-0.5">
+                  Priority {rule.priority}
+                  {rule.amountOperator && (
+                    <span className="ml-2 text-amber-400/70">
+                      {rule.amountOperator === 'EXACT'   ? `= $${rule.amountValue}` :
+                       rule.amountOperator === 'LT'      ? `< $${rule.amountValue}` :
+                       rule.amountOperator === 'LTE'     ? `≤ $${rule.amountValue}` :
+                       rule.amountOperator === 'GT'      ? `> $${rule.amountValue}` :
+                       rule.amountOperator === 'GTE'     ? `≥ $${rule.amountValue}` :
+                       rule.amountOperator === 'BETWEEN' ? `$${rule.amountValue}–$${rule.amountValue2}` : ''}
+                    </span>
+                  )}
+                </p>
               </div>
               <button
                 onClick={() => updateRule.mutate({ id: rule.id, isActive: !rule.isActive })}

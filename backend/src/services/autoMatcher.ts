@@ -40,14 +40,41 @@ function testRule(description: string, pattern: string, matchType: string): bool
   }
 }
 
-export async function findAutoMatch(description: string, accountId: string): Promise<AutoMatchResult | null> {
+/**
+ * Test a transaction amount against an amount filter.
+ * All comparisons use the absolute value so users think in "$645" not "-$645".
+ * Returns true if no operator is set (no amount filter = always passes).
+ */
+function testAmountRule(
+  amount: number,
+  operator: string | null,
+  value: number | null,
+  value2: number | null,
+): boolean {
+  if (!operator || value === null) return true;
+  const abs = Math.abs(amount);
+  switch (operator) {
+    case 'EXACT':   return Math.abs(abs - value) < 0.01;
+    case 'LT':      return abs < value;
+    case 'LTE':     return abs <= value;
+    case 'GT':      return abs > value;
+    case 'GTE':     return abs >= value;
+    case 'BETWEEN': return value2 !== null && abs >= value && abs <= value2;
+    default:        return true;
+  }
+}
+
+export async function findAutoMatch(description: string, amount: number, accountId: string): Promise<AutoMatchResult | null> {
   const rules = await prisma.autoMatchRule.findMany({
     where: { accountId, isActive: true },
     orderBy: { priority: 'desc' },
   });
 
   for (const rule of rules) {
-    if (testRule(description, rule.pattern, rule.matchType)) {
+    if (
+      testRule(description, rule.pattern, rule.matchType) &&
+      testAmountRule(amount, rule.amountOperator ?? null, rule.amountValue ?? null, rule.amountValue2 ?? null)
+    ) {
       return { targetType: rule.targetType as 'BILL' | 'INCOME', targetId: rule.targetId, ruleId: rule.id };
     }
   }

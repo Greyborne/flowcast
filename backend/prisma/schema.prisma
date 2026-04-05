@@ -272,7 +272,10 @@ model AutoMatchRule {
   targetType String   // "BILL" | "INCOME"
   targetId   String   // billTemplateId or incomeSourceId
   priority   Int      @default(0) // higher = evaluated first
-  isActive   Boolean  @default(true)
+  amountOperator String?  // null | "EXACT" | "LT" | "LTE" | "GT" | "GTE" | "BETWEEN"
+  amountValue    Float?   // primary value (absolute)
+  amountValue2   Float?   // upper bound for BETWEEN
+  isActive       Boolean  @default(true)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 

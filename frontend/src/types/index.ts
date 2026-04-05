@@ -197,6 +197,8 @@ export interface ImportBatch {
   _count?: { transactions: number };
 }
 
+export type AmountOperator = 'EXACT' | 'LT' | 'LTE' | 'GT' | 'GTE' | 'BETWEEN';
+
 export interface AutoMatchRule {
   id: string;
   pattern: string;
@@ -204,6 +206,9 @@ export interface AutoMatchRule {
   targetType: 'BILL' | 'INCOME';
   targetId: string;
   priority: number;
+  amountOperator: AmountOperator | null;
+  amountValue: number | null;
+  amountValue2: number | null;
   isActive: boolean;
 }
 

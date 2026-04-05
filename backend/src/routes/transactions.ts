@@ -60,7 +60,7 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
 
     // Filter out keys already in the DB, then deduplicate within this file
     // (same-file dupes like $0.00 rows with identical date+desc would hit the unique constraint)
-    const seenKeys = new Set<string>(existingKeys);
+    const seenKeys = new Set<string>([...existingKeys].filter((k): k is string => k !== null));
     const newTransactions: typeof rawTransactions = [];
     for (const t of rawTransactions) {
       if (t.dedupeKey && seenKeys.has(t.dedupeKey)) continue;
@@ -79,7 +79,7 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
     const created: { id: string; billInstanceId: string | null; incomeEntryId: string | null; payPeriodId: string | null }[] = [];
 
     for (const t of newTransactions) {
-      const match = await findAutoMatch(t.description, req.accountId);
+      const match = await findAutoMatch(t.description, t.amount, req.accountId);
       let billInstanceId: string | null = null;
       let incomeEntryId: string | null = null;
       let status = 'UNMATCHED';
@@ -687,7 +687,7 @@ router.post('/rules/apply', async (req: Request, res: Response) => {
     const affectedPeriodIds = new Set<string>();
 
     for (const txn of unmatched) {
-      const match = await findAutoMatch(txn.description, req.accountId);
+      const match = await findAutoMatch(txn.description, txn.amount, req.accountId);
       if (!match) continue;
 
       // Match to the period that CONTAINS the transaction date — same logic as income.
@@ -800,11 +800,11 @@ router.get('/rules', async (req: Request, res: Response) => {
 // POST /api/transactions/rules
 router.post('/rules', async (req: Request, res: Response) => {
   try {
-    const { pattern, matchType = 'CONTAINS', targetType, targetId, priority = 0 } = req.body;
+    const { pattern, matchType = 'CONTAINS', targetType, targetId, priority = 0, amountOperator = null, amountValue = null, amountValue2 = null } = req.body;
     if (!pattern || !targetType || !targetId) {
       return res.status(400).json({ error: 'pattern, targetType, targetId required' });
     }
-    const rule = await prisma.autoMatchRule.create({ data: { accountId: req.accountId, pattern, matchType, targetType, targetId, priority } });
+    const rule = await prisma.autoMatchRule.create({ data: { accountId: req.accountId, pattern, matchType, targetType, targetId, priority, amountOperator, amountValue, amountValue2 } });
     res.status(201).json(rule);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -814,10 +814,10 @@ router.post('/rules', async (req: Request, res: Response) => {
 // PUT /api/transactions/rules/:id
 router.put('/rules/:id', async (req: Request, res: Response) => {
   try {
-    const { pattern, matchType, targetType, targetId, priority, isActive } = req.body;
+    const { pattern, matchType, targetType, targetId, priority, isActive, amountOperator, amountValue, amountValue2 } = req.body;
     const rule = await prisma.autoMatchRule.update({
       where: { id: req.params.id },
-      data: { pattern, matchType, targetType, targetId, priority, isActive },
+      data: { pattern, matchType, targetType, targetId, priority, isActive, amountOperator, amountValue, amountValue2 },
     });
     res.json(rule);
   } catch (err: any) {
