@@ -155,6 +155,7 @@ export interface IncomeSourceForm {
   notes?: string;
   startDate?: string;
   dayOfMonth?: number | null;
+  expectedDayOfMonth?: number | null;
   sortOrder?: number;
   positionAfterId?: string | null;
   cascadeDefault?: boolean;
