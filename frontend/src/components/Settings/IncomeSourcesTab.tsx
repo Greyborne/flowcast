@@ -6,6 +6,7 @@ import {
   useArchiveIncomeSource,
   type IncomeSourceForm,
 } from '../../hooks/useTemplates';
+import { useAccount } from '../../context/AccountContext';
 
 const INCOME_TYPES = [
   { value: 'W2',                label: 'W2 — every pay period' },
@@ -28,12 +29,13 @@ interface EditFormProps {
   sources: (IncomeSourceForm & { id: string })[];
   currentPosition?: string | null;
   isNew?: boolean;
+  isMonthlyAccount?: boolean;
   onSave: (form: IncomeSourceForm, cascadeDefault: boolean) => Promise<void>;
   onCancel: () => void;
   saving: boolean;
 }
 
-function EditForm({ initial, sources, currentPosition, isNew = false, onSave, onCancel, saving }: EditFormProps) {
+function EditForm({ initial, sources, currentPosition, isNew = false, isMonthlyAccount = false, onSave, onCancel, saving }: EditFormProps) {
   const [form, setForm] = useState<IncomeSourceForm>({
     ...initial,
     positionAfterId: currentPosition !== undefined ? currentPosition : '__last__',
@@ -114,6 +116,25 @@ function EditForm({ initial, sources, currentPosition, isNew = false, onSave, on
           />
           <p className="text-[10px] text-gray-600">
             Income will only appear in the pay period that contains this day.
+          </p>
+        </div>
+      )}
+
+      {/* Expected day of month — only for monthly accounts */}
+      {isMonthlyAccount && (
+        <div className="space-y-1">
+          <label className="text-xs text-gray-400">Expected Day Client Pays <span className="text-gray-600">(optional)</span></label>
+          <input
+            type="number"
+            min={1}
+            max={31}
+            placeholder="e.g. 4"
+            value={form.expectedDayOfMonth ?? ''}
+            onChange={(e) => set({ expectedDayOfMonth: e.target.value ? parseInt(e.target.value) : null })}
+            className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
+          />
+          <p className="text-[10px] text-gray-600">
+            Day of the month this client typically pays. Used for future scheduling features.
           </p>
         </div>
       )}
@@ -209,6 +230,8 @@ export default function IncomeSourcesTab() {
   const createSource = useCreateIncomeSource();
   const updateSource = useUpdateIncomeSource();
   const archiveSource = useArchiveIncomeSource();
+  const { activeAccount } = useAccount();
+  const isMonthlyAccount = activeAccount?.periodType === 'monthly';
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -248,6 +271,7 @@ export default function IncomeSourcesTab() {
           initial={EMPTY_FORM}
           sources={active}
           isNew
+          isMonthlyAccount={isMonthlyAccount}
           onSave={async (form) => {
             await createSource.mutateAsync(form);
             setShowAdd(false);
@@ -306,6 +330,7 @@ export default function IncomeSourcesTab() {
                       initial={s}
                       sources={active}
                       currentPosition={currentPosition}
+                      isMonthlyAccount={isMonthlyAccount}
                       onSave={async (form, cascadeDefault) => {
                         await updateSource.mutateAsync({ id: s.id, form: { ...form, cascadeDefault } });
                         setEditingId(null);

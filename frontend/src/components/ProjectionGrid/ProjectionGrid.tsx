@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { usePayPeriods, useBillGrid, useIncomeGrid, useCreateAdhocBill, useReopenPeriod, useMoveInstance } from '../../hooks/usePayPeriods';
 import type { ReopenResult } from '../../hooks/usePayPeriods';
 import type { PayPeriod, BillTemplate, BillGridInstance, IncomeSource, IncomeGridEntry } from '../../types';
+import { useAccount } from '../../context/AccountContext';
 import ClosePeriodModal from './ClosePeriodModal';
 import api from '../../lib/api';
 
@@ -33,6 +34,14 @@ export default function ProjectionGrid() {
   const [activeCell,       setActiveCell]       = useState<ActiveCell>(null);
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
   const createAdhoc = useCreateAdhocBill();
+  const { activeAccount } = useAccount();
+  const isMonthly = activeAccount?.periodType === 'monthly';
+
+  // For monthly accounts show "Mar 2026"; for biweekly show the payday date
+  const periodLabel = (p: PayPeriod) =>
+    isMonthly
+      ? new Date(p.paydayDate.slice(0, 10) + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+      : fmtDate(p.paydayDate);
 
   if (periodsLoading || billsLoading || incomeLoading) {
     return (
@@ -115,7 +124,7 @@ export default function ProjectionGrid() {
                           : 'bg-gray-900 text-gray-400 border-transparent hover:bg-gray-800 hover:text-gray-200'
                     }`}
                   >
-                    {fmtDate(p.paydayDate)}
+                    {periodLabel(p)}
                     {p.isClosed && <span className="ml-1 opacity-60">🔒</span>}
                     {isNegative && !isSel && <span className="ml-1">⚠</span>}
                     {isSel && <span className="ml-1 text-blue-400">›</span>}

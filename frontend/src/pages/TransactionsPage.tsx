@@ -20,6 +20,7 @@ import { useBillTemplates } from '../hooks/useTemplates';
 import { useIncomeSources } from '../hooks/useTemplates';
 import { usePayPeriods } from '../hooks/usePayPeriods';
 import type { Transaction, AutoMatchRule, MatchCandidate, PayPeriod } from '../types';
+import { useAccount } from '../context/AccountContext';
 
 type Tab = 'inbox' | 'all' | 'history' | 'rules';
 type SortCol = 'date' | 'description' | 'amount' | 'status';
@@ -552,11 +553,13 @@ function PeriodBreakRow({
   period,
   txns,
   runningBalanceMap,
+  isMonthly,
   onRefReady,
 }: {
   period: PayPeriod;
   txns: Transaction[];
   runningBalanceMap: Map<string, number>;
+  isMonthly: boolean;
   onRefReady: (el: HTMLDivElement | null) => void;
 }) {
   const incomeTotal = txns.reduce((s, t) => t.amount > 0 ? s + t.amount : s, 0);
@@ -589,9 +592,11 @@ function PeriodBreakRow({
     >
       <div className="flex items-center gap-2 shrink-0">
         <span className="font-semibold text-gray-200">
-          {fmtShort(period.startDate)} – {fmtShort(period.endDate)}
+          {isMonthly
+            ? new Date(period.paydayDate.slice(0, 10) + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+            : `${fmtShort(period.startDate)} – ${fmtShort(period.endDate)}`}
         </span>
-        <span className="text-gray-500">Payday {fmtDate(period.paydayDate)}</span>
+        {!isMonthly && <span className="text-gray-500">Payday {fmtDate(period.paydayDate)}</span>}
         <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
           period.isClosed ? 'bg-gray-700 text-gray-400' : 'bg-blue-900/60 text-blue-300'
         }`}>
@@ -650,6 +655,8 @@ function AllTab({ onMatch }: { onMatch: (txn: Transaction) => void }) {
   const { data, isLoading } = useTransactions({ limit: 5000 });
   const allTransactions = data?.transactions ?? [];
   const { data: periods = [] } = usePayPeriods();
+  const { activeAccount } = useAccount();
+  const isMonthly = activeAccount?.periodType === 'monthly';
 
   const sortedPeriods = useMemo(
     () => [...periods].sort((a, b) => a.paydayDate.localeCompare(b.paydayDate)),
@@ -812,6 +819,7 @@ function AllTab({ onMatch }: { onMatch: (txn: Transaction) => void }) {
                     period={vg.period}
                     txns={origGroup.txns}
                     runningBalanceMap={runningBalanceMap}
+                    isMonthly={isMonthly}
                     onRefReady={el => {
                       if (el) periodRefs.current.set(vg.period.id, el);
                       else periodRefs.current.delete(vg.period.id);
