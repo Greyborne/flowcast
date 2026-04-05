@@ -1,12 +1,20 @@
 /**
- * Bank of America CSV Parser
+ * Universal Bank CSV Parser
  *
- * BofA checking/savings CSV format (export from Online Banking → Download):
- *   Date,Description,Amount,Running Bal.
- *   01/15/2024,"WALMART STORE #1234",-45.00,1234.56
+ * Handles common bank CSV export formats including:
+ *   - Bank of America checking/savings:  Date, Description, Amount, Running Bal.
+ *   - Bank of America credit card:       Posted Date, Payee, Amount
+ *   - Novo business checking:            Date, Description, Amount, Note, Check Number, Category
+ *   - Chase:                             Transaction Date, Description, Category, Type, Amount
+ *   - Capital One:                       Transaction Date, Posted Date, Card No., Description, Category, Debit, Credit
+ *   - Wells Fargo:                       Date, Amount, *, Check Number, Description
+ *   - Generic Mint/Tiller exports:       Date, Description, Amount, ...
  *
- * Credit card CSV format is slightly different — we handle both by detecting
- * column headers and mapping accordingly.
+ * Date formats supported:
+ *   MM/DD/YYYY  MM-DD-YYYY  YYYY-MM-DD  YYYY/MM/DD  M/D/YYYY  M-D-YYYY
+ *
+ * Amount formats supported:
+ *   -45.00  "-$45.00"  "$1,234.56"  "($45.00)"  45.00 (debit/credit split columns)
  *
  * A SHA-256 dedupeKey is computed from date + amount + description so
  * re-importing the same file won't create duplicates.
@@ -34,7 +42,7 @@ function computeDedupeKey(date: Date, amount: number, description: string): stri
 }
 
 /**
- * Parse a CSV line respecting quoted fields.
+ * Parse a CSV line respecting quoted fields (handles escaped quotes inside fields).
  */
 function parseLine(line: string): string[] {
   const fields: string[] = [];
@@ -62,32 +70,88 @@ function parseLine(line: string): string[] {
 }
 
 /**
- * Parse a date string in MM/DD/YYYY or YYYY-MM-DD format.
+ * Parse common bank date formats:
+ *   MM/DD/YYYY  MM-DD-YYYY  YYYY-MM-DD  YYYY/MM/DD  M/D/YYYY  M-D-YYYY
  */
 function parseDate(raw: string): Date | null {
   raw = raw.trim();
-  // MM/DD/YYYY
-  const mdy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(raw);
-  if (mdy) {
-    return new Date(Date.UTC(parseInt(mdy[3]), parseInt(mdy[1]) - 1, parseInt(mdy[2])));
+
+  // MM/DD/YYYY or M/D/YYYY
+  const mdy_slash = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(raw);
+  if (mdy_slash) {
+    return new Date(Date.UTC(parseInt(mdy_slash[3]), parseInt(mdy_slash[1]) - 1, parseInt(mdy_slash[2])));
   }
-  // YYYY-MM-DD
-  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
-  if (ymd) {
-    return new Date(Date.UTC(parseInt(ymd[1]), parseInt(ymd[2]) - 1, parseInt(ymd[3])));
+
+  // MM-DD-YYYY or M-D-YYYY (Novo, some credit unions)
+  const mdy_dash = /^(\d{1,2})-(\d{1,2})-(\d{4})$/.exec(raw);
+  if (mdy_dash) {
+    return new Date(Date.UTC(parseInt(mdy_dash[3]), parseInt(mdy_dash[1]) - 1, parseInt(mdy_dash[2])));
   }
+
+  // YYYY-MM-DD (ISO, Chase, Capital One)
+  const ymd_dash = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (ymd_dash) {
+    return new Date(Date.UTC(parseInt(ymd_dash[1]), parseInt(ymd_dash[2]) - 1, parseInt(ymd_dash[3])));
+  }
+
+  // YYYY/MM/DD
+  const ymd_slash = /^(\d{4})\/(\d{2})\/(\d{2})$/.exec(raw);
+  if (ymd_slash) {
+    return new Date(Date.UTC(parseInt(ymd_slash[1]), parseInt(ymd_slash[2]) - 1, parseInt(ymd_slash[3])));
+  }
+
   return null;
 }
 
+/**
+ * Parse a bank amount string into a signed float.
+ * Handles: -45.00  "-$45.00"  "$1,234.56"  "($45.00)"  1,234.56
+ * Parentheses = negative (accounting format).
+ */
+function parseAmount(raw: string): number | null {
+  let s = raw.trim();
+  if (!s) return null;
+
+  const isNegative = s.startsWith('(') && s.endsWith(')');
+  // Strip currency symbols, commas, spaces, parentheses
+  s = s.replace(/[$£€,\s()]/g, '');
+  const n = parseFloat(s);
+  if (isNaN(n)) return null;
+  return isNegative ? -Math.abs(n) : n;
+}
+
+/**
+ * Find the index of a header column given a list of candidate names (lowercased).
+ */
+function findCol(headers: string[], candidates: string[]): number {
+  for (const candidate of candidates) {
+    const idx = headers.findIndex((h) => h === candidate);
+    if (idx !== -1) return idx;
+  }
+  // Partial match fallback
+  for (const candidate of candidates) {
+    const idx = headers.findIndex((h) => h.includes(candidate));
+    if (idx !== -1) return idx;
+  }
+  return -1;
+}
+
 export function parseCSV(content: string): CSVParseResult {
-  const lines = content.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  // Strip UTF-8 BOM if present
+  const cleaned = content.replace(/^\uFEFF/, '');
+  const lines = cleaned.split(/\r?\n/).filter((l) => l.trim().length > 0);
   if (lines.length < 2) return { transactions: [], skippedRows: 0 };
 
-  // Find header row (first line containing "Date" and "Amount")
+  // Find header row — first line that contains both a date-like and amount-like column name
   let headerIdx = -1;
   for (let i = 0; i < Math.min(lines.length, 10); i++) {
     const lower = lines[i].toLowerCase();
     if (lower.includes('date') && lower.includes('amount')) {
+      headerIdx = i;
+      break;
+    }
+    // Debit/credit format: has 'date' and ('debit' or 'credit')
+    if (lower.includes('date') && (lower.includes('debit') || lower.includes('credit'))) {
       headerIdx = i;
       break;
     }
@@ -96,34 +160,69 @@ export function parseCSV(content: string): CSVParseResult {
 
   const headers = parseLine(lines[headerIdx]).map((h) => h.toLowerCase().trim());
 
-  // Column index resolution — handle BofA checking and credit card variants
-  const dateCol = headers.findIndex((h) => h === 'date' || h === 'posted date' || h === 'transaction date');
-  const descCol = headers.findIndex((h) => h === 'description' || h === 'payee' || h === 'merchant name');
-  const amtCol = headers.findIndex((h) => h === 'amount');
+  // ── Column detection ─────────────────────────────────────────────────────────
 
-  if (dateCol === -1 || amtCol === -1) return { transactions: [], skippedRows: lines.length };
+  const dateCol = findCol(headers, [
+    'date', 'transaction date', 'posted date', 'trans date', 'transactiondate',
+  ]);
+
+  const descCol = findCol(headers, [
+    'description', 'payee', 'merchant name', 'name', 'memo', 'narrative', 'details',
+    'transaction description', 'trans description',
+  ]);
+
+  // Single signed amount column
+  const amtCol = findCol(headers, ['amount', 'transaction amount', 'trans amount']);
+
+  // Split debit/credit columns (Capital One, some credit unions)
+  const debitCol  = findCol(headers, ['debit',  'withdrawal', 'withdrawals', 'charges']);
+  const creditCol = findCol(headers, ['credit', 'deposit',    'deposits',   'payments']);
+
+  const hasAmount     = amtCol !== -1;
+  const hasSplitCols  = debitCol !== -1 || creditCol !== -1;
+
+  if (dateCol === -1 || (!hasAmount && !hasSplitCols)) {
+    return { transactions: [], skippedRows: lines.length };
+  }
 
   const transactions: ParsedCSVTransaction[] = [];
   let skippedRows = 0;
 
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const fields = parseLine(lines[i]);
-    if (fields.length <= Math.max(dateCol, amtCol)) {
-      skippedRows++;
-      continue;
-    }
 
+    // ── Date ────────────────────────────────────────────────────────────────────
     const date = parseDate(fields[dateCol] ?? '');
     if (!date) { skippedRows++; continue; }
 
-    const amtStr = (fields[amtCol] ?? '').replace(/[$,\s]/g, '');
-    const amount = parseFloat(amtStr);
-    if (isNaN(amount)) { skippedRows++; continue; }
+    // ── Amount ──────────────────────────────────────────────────────────────────
+    let amount: number | null = null;
 
-    // Use description col if present, otherwise fall back to first non-date/amount col
-    let description = descCol !== -1 ? (fields[descCol] ?? '') : '';
+    if (hasAmount) {
+      amount = parseAmount(fields[amtCol] ?? '');
+    } else {
+      // Split debit/credit: debit is money out (negative), credit is money in (positive)
+      const debit  = debitCol  !== -1 ? parseAmount(fields[debitCol]  ?? '') : null;
+      const credit = creditCol !== -1 ? parseAmount(fields[creditCol] ?? '') : null;
+      if (debit != null && debit !== 0) {
+        amount = -Math.abs(debit);
+      } else if (credit != null && credit !== 0) {
+        amount = Math.abs(credit);
+      } else {
+        amount = 0;
+      }
+    }
+
+    if (amount === null || isNaN(amount)) { skippedRows++; continue; }
+
+    // ── Description ─────────────────────────────────────────────────────────────
+    let description = '';
+    if (descCol !== -1) {
+      description = fields[descCol] ?? '';
+    }
     if (!description) {
-      description = fields.find((_, idx) => idx !== dateCol && idx !== amtCol) ?? 'Unknown';
+      // Fallback: first non-date, non-amount field that has content
+      description = fields.find((_, idx) => idx !== dateCol && idx !== amtCol && idx !== debitCol && idx !== creditCol && fields[idx].trim()) ?? 'Unknown';
     }
     description = description.trim();
 
