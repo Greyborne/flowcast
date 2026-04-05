@@ -81,6 +81,44 @@ router.post('/', async (req: Request, res: Response) => {
     const { positionAfterId, ...rest } = req.body;
     const source = await prisma.incomeSource.create({ data: { ...rest, accountId: req.accountId, sortOrder: 9999 } });
     await reorderIncome(source.id, req.accountId, positionAfterId !== undefined ? positionAfterId : source.id);
+
+    // Backfill IncomeEntry rows for all existing pay periods so the source
+    // shows up in the grid immediately without requiring a period regeneration.
+    if (source.type !== 'AD_HOC') {
+      const { incomeFallsInPeriod } = await import('../services/projectionEngine');
+      const account = await prisma.account.findUnique({ where: { id: req.accountId } });
+      const periods = await prisma.payPeriod.findMany({
+        where: { accountId: req.accountId },
+        orderBy: { paydayDate: 'asc' },
+      });
+
+      let firstPeriodId: string | null = null;
+      for (const period of periods) {
+        // Monthly accounts: one entry per period (each period = one month)
+        // Biweekly W2: one entry per period
+        // Biweekly MONTHLY_RECURRING: only periods where dayOfMonth falls in range
+        const shouldCreate =
+          account?.periodType === 'monthly' ||
+          source.type === 'W2' ||
+          (source.type === 'MONTHLY_RECURRING' && source.dayOfMonth != null &&
+            incomeFallsInPeriod(source.dayOfMonth, period.startDate, period.endDate));
+
+        if (!shouldCreate) continue;
+
+        await prisma.incomeEntry.upsert({
+          where: { payPeriodId_incomeSourceId: { payPeriodId: period.id, incomeSourceId: source.id } },
+          create: { accountId: req.accountId, payPeriodId: period.id, incomeSourceId: source.id, projectedAmount: source.defaultAmount },
+          update: {},
+        });
+        if (!firstPeriodId) firstPeriodId = period.id;
+      }
+
+      if (firstPeriodId) {
+        const affectedIds = await recomputeFromPeriod(firstPeriodId);
+        broadcast({ type: 'BALANCE_UPDATE', payPeriodIds: affectedIds });
+      }
+    }
+
     const updated = await prisma.incomeSource.findUniqueOrThrow({ where: { id: source.id } });
     res.status(201).json(updated);
   } catch (err: any) { res.status(400).json({ error: err.message }); }
