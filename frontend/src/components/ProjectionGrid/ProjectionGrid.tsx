@@ -1,12 +1,10 @@
 import { useState, Fragment, useRef, useEffect } from 'react';
-import axios from 'axios';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePayPeriods, useBillGrid, useIncomeGrid, useCreateAdhocBill, useReopenPeriod, useMoveInstance } from '../../hooks/usePayPeriods';
 import type { ReopenResult } from '../../hooks/usePayPeriods';
 import type { PayPeriod, BillTemplate, BillGridInstance, IncomeSource, IncomeGridEntry } from '../../types';
 import ClosePeriodModal from './ClosePeriodModal';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+import api from '../../lib/api';
 
 const fmt = (n: number | undefined | null) =>
   n != null
@@ -19,7 +17,7 @@ const fmtDate = (d: string) =>
   });
 
 type ActiveCell = { type: 'income' | 'bill'; id: string; mode: 'reconcile' | 'unreconcile' } | null;
-type BillGridData  = { templates: BillTemplate[]; instanceMap: Record<string, Record<string, BillGridInstance>> };
+type BillGridData  = { templates: BillTemplate[]; instanceMap: Record<string, Record<string, BillGridInstance>>; groups: string[] };
 type IncomeGridData = { sources: IncomeSource[]; entryMap: Record<string, Record<string, IncomeGridEntry>> };
 
 // ── thead + projected balance row heights (used for dual-sticky offsets) ──────
@@ -316,7 +314,7 @@ function PeriodDetailPanel({
   const handleBatchReconcile = async () => {
     setBatchState('saving');
     try {
-      await axios.post(`${API}/api/reconciliation/period/${period.id}/batch`, {
+      await api.post(`/api/reconciliation/period/${period.id}/batch`, {
         billInstanceIds:  [...checkedBills],
         incomeEntryIds:   [...checkedIncome],
       });
@@ -492,13 +490,13 @@ function PeriodDetailPanel({
                     <ReconcileInput
                       defaultValue={entry.actualAmount ?? entry.projectedAmount}
                       onDraftSave={async (amount, cascade) => {
-                        await axios.patch(`${API}/api/income/entry/${entry.id}`, { projectedAmount: amount, cascade });
+                        await api.patch(`/api/income/entry/${entry.id}`, { projectedAmount: amount, cascade });
                         await qc.invalidateQueries({ queryKey: ['incomeGrid'] });
                         await qc.invalidateQueries({ queryKey: ['payPeriods'] });
                         setActivePanelCell(null);
                       }}
                       onReconcile={async (amount, cascade) => {
-                        await axios.post(`${API}/api/reconciliation/income/${entry.id}`, { actualAmount: amount, cascade });
+                        await api.post(`/api/reconciliation/income/${entry.id}`, { actualAmount: amount, cascade });
                         await qc.invalidateQueries({ queryKey: ['incomeGrid'] });
                         await qc.invalidateQueries({ queryKey: ['payPeriods'] });
                         setActivePanelCell(null);
@@ -508,7 +506,7 @@ function PeriodDetailPanel({
                   ) : (
                     <UnreconcileConfirm
                       onConfirm={async () => {
-                        await axios.delete(`${API}/api/reconciliation/income/${entry.id}`);
+                        await api.delete(`/api/reconciliation/income/${entry.id}`);
                         await qc.invalidateQueries({ queryKey: ['incomeGrid'] });
                         await qc.invalidateQueries({ queryKey: ['payPeriods'] });
                         setActivePanelCell(null);
@@ -564,13 +562,13 @@ function PeriodDetailPanel({
                       <ReconcileInput
                         defaultValue={inst.actualAmount ?? inst.projectedAmount}
                         onDraftSave={async (val, cascade) => {
-                          await axios.patch(`${API}/api/bills/instance/${inst.id}`, { projectedAmount: val, cascade });
+                          await api.patch(`/api/bills/instance/${inst.id}`, { projectedAmount: val, cascade });
                           await qc.invalidateQueries({ queryKey: ['billGrid'] });
                           await qc.invalidateQueries({ queryKey: ['payPeriods'] });
                           setActivePanelCell(null);
                         }}
                         onReconcile={async (val, cascade) => {
-                          await axios.post(`${API}/api/reconciliation/bill/${inst.id}`, { actualAmount: val, cascade });
+                          await api.post(`/api/reconciliation/bill/${inst.id}`, { actualAmount: val, cascade });
                           await qc.invalidateQueries({ queryKey: ['billGrid'] });
                           await qc.invalidateQueries({ queryKey: ['payPeriods'] });
                           setActivePanelCell(null);
@@ -584,7 +582,7 @@ function PeriodDetailPanel({
                     ) : (
                       <UnreconcileConfirm
                         onConfirm={async () => {
-                          await axios.delete(`${API}/api/reconciliation/bill/${inst.id}`);
+                          await api.delete(`/api/reconciliation/bill/${inst.id}`);
                           await qc.invalidateQueries({ queryKey: ['billGrid'] });
                           await qc.invalidateQueries({ queryKey: ['payPeriods'] });
                           setActivePanelCell(null);
@@ -680,11 +678,11 @@ function IncomeRow({
               <ReconcileInput
                 defaultValue={entry.actualAmount ?? entry.projectedAmount}
                 onDraftSave={async (amount, cascade) => {
-                  await axios.patch(`${API}/api/income/entry/${entry.id}`, { projectedAmount: amount, cascade });
+                  await api.patch(`/api/income/entry/${entry.id}`, { projectedAmount: amount, cascade });
                   setActiveCell(null);
                 }}
                 onReconcile={async (amount, cascade) => {
-                  await axios.post(`${API}/api/reconciliation/income/${entry.id}`, { actualAmount: amount, cascade });
+                  await api.post(`/api/reconciliation/income/${entry.id}`, { actualAmount: amount, cascade });
                   setActiveCell(null);
                 }}
                 onCancel={() => setActiveCell(null)}
@@ -692,7 +690,7 @@ function IncomeRow({
             ) : mode === 'unreconcile' ? (
               <UnreconcileConfirm
                 onConfirm={async () => {
-                  await axios.delete(`${API}/api/reconciliation/income/${entry.id}`);
+                  await api.delete(`/api/reconciliation/income/${entry.id}`);
                   setActiveCell(null);
                 }}
                 onCancel={() => setActiveCell(null)}
@@ -766,11 +764,11 @@ function BillRow({
               <ReconcileInput
                 defaultValue={inst.actualAmount ?? inst.projectedAmount}
                 onDraftSave={async (val, cascade) => {
-                  await axios.patch(`${API}/api/bills/instance/${inst.id}`, { projectedAmount: val, cascade });
+                  await api.patch(`/api/bills/instance/${inst.id}`, { projectedAmount: val, cascade });
                   setActiveCell(null);
                 }}
                 onReconcile={async (val, cascade) => {
-                  await axios.post(`${API}/api/reconciliation/bill/${inst.id}`, { actualAmount: val, cascade });
+                  await api.post(`/api/reconciliation/bill/${inst.id}`, { actualAmount: val, cascade });
                   setActiveCell(null);
                 }}
                 onCancel={() => setActiveCell(null)}
@@ -782,7 +780,7 @@ function BillRow({
             ) : mode === 'unreconcile' ? (
               <UnreconcileConfirm
                 onConfirm={async () => {
-                  await axios.delete(`${API}/api/reconciliation/bill/${inst.id}`);
+                  await api.delete(`/api/reconciliation/bill/${inst.id}`);
                   setActiveCell(null);
                 }}
                 onCancel={() => setActiveCell(null)}

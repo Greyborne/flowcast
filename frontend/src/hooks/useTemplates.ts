@@ -1,7 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import axios from 'axios';
+import api from '../lib/api';
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 // ── Bill Templates ────────────────────────────────────────────────────────────
 
@@ -27,7 +26,7 @@ export function useBillTemplates() {
   return useQuery({
     queryKey: ['billTemplates'],
     queryFn: async () => {
-      const { data } = await axios.get(`${API}/api/bills`);
+      const { data } = await api.get(`/api/bills`);
       return data as (BillTemplateForm & { id: string; billType: string })[];
     },
   });
@@ -37,7 +36,7 @@ export function useCreateBillTemplate() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (form: BillTemplateForm) => {
-      const { data } = await axios.post(`${API}/api/bills`, { ...form, billType: 'EXPENSE' });
+      const { data } = await api.post(`/api/bills`, { ...form, billType: 'EXPENSE' });
       return data;
     },
     onSuccess: () => {
@@ -51,7 +50,7 @@ export function useUpdateBillTemplate() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, form }: { id: string; form: Partial<BillTemplateForm> }) => {
-      const { data } = await axios.put(`${API}/api/bills/${id}`, form);
+      const { data } = await api.put(`/api/bills/${id}`, form);
       return data;
     },
     onSuccess: () => {
@@ -66,7 +65,7 @@ export function useArchiveBillTemplate() {
   return useMutation({
     mutationFn: async ({ id, restore }: { id: string; restore?: boolean }) => {
       const action = restore ? 'restore' : 'archive';
-      const { data } = await axios.patch(`${API}/api/bills/${id}/${action}`);
+      const { data } = await api.patch(`/api/bills/${id}/${action}`);
       return data;
     },
     onSuccess: () => {
@@ -80,7 +79,7 @@ export function useSetMonthlyAmount() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ templateId, year, month, amount }: { templateId: string; year: number; month: number; amount: number }) => {
-      const { data } = await axios.put(`${API}/api/bills/${templateId}/monthly/${year}/${month}`, { amount });
+      const { data } = await api.put(`/api/bills/${templateId}/monthly/${year}/${month}`, { amount });
       return data;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['billTemplates'] }),
@@ -91,7 +90,7 @@ export function useDeleteMonthlyAmount() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ templateId, year, month }: { templateId: string; year: number; month: number }) => {
-      await axios.delete(`${API}/api/bills/${templateId}/monthly/${year}/${month}`);
+      await api.delete(`/api/bills/${templateId}/monthly/${year}/${month}`);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['billTemplates'] }),
   });
@@ -103,7 +102,7 @@ export function useBillGroups() {
   return useQuery<string[]>({
     queryKey: ['billGroups'],
     queryFn: async () => {
-      const { data } = await axios.get(`${API}/api/bills/groups`);
+      const { data } = await api.get(`/api/bills/groups`);
       return data;
     },
   });
@@ -113,7 +112,7 @@ export function useCreateBillGroup() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ name, positionAfterId }: { name: string; positionAfterId: string | null }) => {
-      const { data } = await axios.post(`${API}/api/bills/groups`, { name, positionAfterId });
+      const { data } = await api.post(`/api/bills/groups`, { name, positionAfterId });
       return data as string[];
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['billGroups'] }),
@@ -124,7 +123,7 @@ export function useRenameBillGroup() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ oldName, newName, positionAfterId }: { oldName: string; newName: string; positionAfterId: string | null }) => {
-      const { data } = await axios.patch(`${API}/api/bills/groups/rename`, { oldName, newName, positionAfterId });
+      const { data } = await api.patch(`/api/bills/groups/rename`, { oldName, newName, positionAfterId });
       return data as string[];
     },
     onSuccess: () => {
@@ -138,7 +137,7 @@ export function useDeleteBillGroup() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (name: string) => {
-      const { data } = await axios.delete(`${API}/api/bills/groups/${encodeURIComponent(name)}`);
+      const { data } = await api.delete(`/api/bills/groups/${encodeURIComponent(name)}`);
       return data as string[];
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['billGroups'] }),
@@ -165,7 +164,7 @@ export function useIncomeSources() {
   return useQuery({
     queryKey: ['incomeSources'],
     queryFn: async () => {
-      const { data } = await axios.get(`${API}/api/income`);
+      const { data } = await api.get(`/api/income`);
       return data as (IncomeSourceForm & { id: string })[];
     },
   });
@@ -175,7 +174,7 @@ export function useCreateIncomeSource() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (form: IncomeSourceForm) => {
-      const { data } = await axios.post(`${API}/api/income`, {
+      const { data } = await api.post(`/api/income`, {
         ...form,
         startDate: form.startDate ? new Date(form.startDate) : new Date(),
       });
@@ -192,7 +191,7 @@ export function useUpdateIncomeSource() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, form }: { id: string; form: Partial<IncomeSourceForm> }) => {
-      const { data } = await axios.put(`${API}/api/income/${id}`, form);
+      const { data } = await api.put(`/api/income/${id}`, form);
       return data;
     },
     onSuccess: () => {
@@ -207,7 +206,7 @@ export function useArchiveIncomeSource() {
   return useMutation({
     mutationFn: async ({ id, restore }: { id: string; restore?: boolean }) => {
       const action = restore ? 'restore' : 'archive';
-      const { data } = await axios.patch(`${API}/api/income/${id}/${action}`);
+      const { data } = await api.patch(`/api/income/${id}/${action}`);
       return data;
     },
     onSuccess: () => {

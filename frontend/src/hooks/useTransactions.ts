@@ -1,8 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import axios from 'axios';
+import api from '../lib/api';
 import type { Transaction, ImportBatch, AutoMatchRule, ImportResult, MatchCandidate } from '../types';
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 // ── Transactions ──────────────────────────────────────────────────────────────
 
@@ -25,7 +24,7 @@ export function useTransactions(filters: TransactionFilters = {}) {
   return useQuery<{ total: number; transactions: Transaction[] }>({
     queryKey: ['transactions', filters],
     queryFn: async () => {
-      const { data } = await axios.get(`${API}/api/transactions?${params}`);
+      const { data } = await api.get(`/api/transactions?${params}`);
       return data;
     },
   });
@@ -36,7 +35,7 @@ export function useMatchCandidates(transactionId: string | null, search?: string
     queryKey: ['matchCandidates', transactionId, search],
     queryFn: async () => {
       const params = search ? `?search=${encodeURIComponent(search)}` : '';
-      const { data } = await axios.get(`${API}/api/transactions/${transactionId}/candidates${params}`);
+      const { data } = await api.get(`/api/transactions/${transactionId}/candidates${params}`);
       return data;
     },
     enabled: !!transactionId,
@@ -49,7 +48,7 @@ export function useImportTransactions() {
     mutationFn: async (file: File) => {
       const form = new FormData();
       form.append('file', file);
-      const { data } = await axios.post(`${API}/api/transactions/import`, form, {
+      const { data } = await api.post(`/api/transactions/import`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       return data as ImportResult;
@@ -65,7 +64,7 @@ export function useMatchTransaction() {
   const qc = useQueryClient();
   return useMutation<void, Error, { id: string; billInstanceId?: string; billTemplateId?: string; incomeEntryId?: string; incomeSourceId?: string }>({
     mutationFn: async ({ id, billInstanceId, billTemplateId, incomeEntryId, incomeSourceId }) => {
-      await axios.patch(`${API}/api/transactions/${id}/match`, { billInstanceId, billTemplateId, incomeEntryId, incomeSourceId });
+      await api.patch(`/api/transactions/${id}/match`, { billInstanceId, billTemplateId, incomeEntryId, incomeSourceId });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['transactions'] });
@@ -80,7 +79,7 @@ export function useUnmatchTransaction() {
   const qc = useQueryClient();
   return useMutation<void, Error, string>({
     mutationFn: async (id: string) => {
-      await axios.patch(`${API}/api/transactions/${id}/unmatch`);
+      await api.patch(`/api/transactions/${id}/unmatch`);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['transactions'] });
@@ -94,7 +93,7 @@ export function useIgnoreTransaction() {
   const qc = useQueryClient();
   return useMutation<void, Error, { id: string; ignore: boolean }>({
     mutationFn: async ({ id, ignore }) => {
-      await axios.patch(`${API}/api/transactions/${id}/${ignore ? 'ignore' : 'unignore'}`);
+      await api.patch(`/api/transactions/${id}/${ignore ? 'ignore' : 'unignore'}`);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['transactions'] }),
   });
@@ -104,7 +103,7 @@ export function useCreateManualTransaction() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (payload: { date: string; amount: number; description: string; memo?: string; notes?: string }) => {
-      const { data } = await axios.post(`${API}/api/transactions/manual`, payload);
+      const { data } = await api.post(`/api/transactions/manual`, payload);
       return data as Transaction;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['transactions'] }),
@@ -115,7 +114,7 @@ export function useDeleteTransaction() {
   const qc = useQueryClient();
   return useMutation<void, Error, string>({
     mutationFn: async (id: string) => {
-      await axios.delete(`${API}/api/transactions/${id}`);
+      await api.delete(`/api/transactions/${id}`);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['transactions'] });
@@ -131,7 +130,7 @@ export function useImportBatches() {
   return useQuery<ImportBatch[]>({
     queryKey: ['importBatches'],
     queryFn: async () => {
-      const { data } = await axios.get(`${API}/api/transactions/batches`);
+      const { data } = await api.get(`/api/transactions/batches`);
       return data;
     },
   });
@@ -141,7 +140,7 @@ export function useDeleteImportBatch() {
   const qc = useQueryClient();
   return useMutation<void, Error, string>({
     mutationFn: async (id: string) => {
-      await axios.delete(`${API}/api/transactions/batches/${id}`);
+      await api.delete(`/api/transactions/batches/${id}`);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['importBatches'] });
@@ -158,7 +157,7 @@ export function useAutoMatchRules() {
   return useQuery<AutoMatchRule[]>({
     queryKey: ['autoMatchRules'],
     queryFn: async () => {
-      const { data } = await axios.get(`${API}/api/transactions/rules`);
+      const { data } = await api.get(`/api/transactions/rules`);
       return data;
     },
   });
@@ -168,7 +167,7 @@ export function useCreateAutoMatchRule() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (rule: Omit<AutoMatchRule, 'id' | 'isActive' | 'createdAt' | 'updatedAt'> & { isActive?: boolean }) => {
-      const { data } = await axios.post(`${API}/api/transactions/rules`, rule);
+      const { data } = await api.post(`/api/transactions/rules`, rule);
       return data as AutoMatchRule;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['autoMatchRules'] }),
@@ -179,7 +178,7 @@ export function useUpdateAutoMatchRule() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, ...updates }: Partial<AutoMatchRule> & { id: string }) => {
-      const { data } = await axios.put(`${API}/api/transactions/rules/${id}`, updates);
+      const { data } = await api.put(`/api/transactions/rules/${id}`, updates);
       return data as AutoMatchRule;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['autoMatchRules'] }),
@@ -190,7 +189,7 @@ export function useDeleteAutoMatchRule() {
   const qc = useQueryClient();
   return useMutation<void, Error, string>({
     mutationFn: async (id: string) => {
-      await axios.delete(`${API}/api/transactions/rules/${id}`);
+      await api.delete(`/api/transactions/rules/${id}`);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['autoMatchRules'] }),
   });
@@ -200,7 +199,7 @@ export function useApplyAutoMatchRules() {
   const qc = useQueryClient();
   return useMutation<{ total: number; matched: number }, Error, { from?: string; to?: string; force?: boolean } | void>({
     mutationFn: async (params) => {
-      const { data } = await axios.post(`${API}/api/transactions/rules/apply`, params ?? {});
+      const { data } = await api.post(`/api/transactions/rules/apply`, params ?? {});
       return data;
     },
     onSuccess: () => {

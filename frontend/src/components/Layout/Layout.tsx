@@ -1,11 +1,22 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
+import AccountSwitcher from '../Accounts/AccountSwitcher';
+import NewAccountWizard from '../Accounts/NewAccountWizard';
+import { useAccount } from '../../context/AccountContext';
 
 interface LayoutProps {
   children: ReactNode;
 }
 
 export default function Layout({ children }: LayoutProps) {
+  const [showWizard, setShowWizard] = useState(false);
+  const { switchAccount } = useAccount();
+
+  function handleAccountCreated(newAccountId: string) {
+    setShowWizard(false);
+    switchAccount(newAccountId);
+  }
+
   return (
     <div className="h-screen flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
       {/* ── Header ── */}
@@ -60,8 +71,12 @@ export default function Layout({ children }: LayoutProps) {
           </nav>
         </div>
 
-        <div className="text-sm text-gray-400">
-          {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+        {/* ── Right side: account switcher + date ── */}
+        <div className="flex items-center gap-4">
+          <AccountSwitcher onCreateNew={() => setShowWizard(true)} />
+          <div className="text-sm text-gray-400">
+            {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+          </div>
         </div>
       </header>
 
@@ -69,6 +84,14 @@ export default function Layout({ children }: LayoutProps) {
       <main className="flex-1 min-h-0 overflow-hidden p-6">
         {children}
       </main>
+
+      {/* ── New Account Wizard ── */}
+      {showWizard && (
+        <NewAccountWizard
+          onClose={() => setShowWizard(false)}
+          onCreated={handleAccountCreated}
+        />
+      )}
     </div>
   );
 }

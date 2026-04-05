@@ -2,6 +2,16 @@
 
 export type IncomeType = 'W2' | 'MONTHLY_RECURRING' | 'AD_HOC';
 export type BillType = 'EXPENSE' | 'TRANSFER' | 'SAVINGS';
+export type PeriodType = 'biweekly' | 'monthly';
+export type AccountColor = 'blue' | 'green' | 'purple' | 'amber' | 'rose' | 'teal';
+
+export interface Account {
+  id: string;
+  name: string;
+  color: AccountColor;
+  periodType: PeriodType;
+  createdAt: string;
+}
 
 export interface PayPeriod {
   id: string;
