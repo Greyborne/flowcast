@@ -1,14 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import axios from 'axios';
+import api from '../lib/api';
 import type { PayPeriod, BillGridData, IncomeGridData } from '../types';
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 export function usePayPeriods() {
   return useQuery<PayPeriod[]>({
     queryKey: ['payPeriods'],
     queryFn: async () => {
-      const { data } = await axios.get(`${API}/api/pay-periods`);
+      const { data } = await api.get(`/api/pay-periods`);
       return data;
     },
   });
@@ -18,7 +17,7 @@ export function useBillGrid() {
   return useQuery<BillGridData>({
     queryKey: ['billGrid'],
     queryFn: async () => {
-      const { data } = await axios.get(`${API}/api/bills/grid`);
+      const { data } = await api.get(`/api/bills/grid`);
       return data;
     },
   });
@@ -28,7 +27,7 @@ export function useIncomeGrid() {
   return useQuery<IncomeGridData>({
     queryKey: ['incomeGrid'],
     queryFn: async () => {
-      const { data } = await axios.get(`${API}/api/income/grid`);
+      const { data } = await api.get(`/api/income/grid`);
       return data;
     },
   });
@@ -42,7 +41,7 @@ export function useCreateAdhocBill() {
       payPeriodId: string;
       projectedAmount?: number;
     }) => {
-      const { data } = await axios.post(`${API}/api/bills/adhoc`, { billTemplateId, payPeriodId, projectedAmount });
+      const { data } = await api.post(`/api/bills/adhoc`, { billTemplateId, payPeriodId, projectedAmount });
       return data;
     },
     onSuccess: () => {
@@ -54,7 +53,7 @@ export function useCreateAdhocBill() {
 
 export function useReconcileIncome() {
   return async (incomeEntryId: string, actualAmount: number, notes?: string) => {
-    await axios.post(`${API}/api/reconciliation/income/${incomeEntryId}`, {
+    await api.post(`/api/reconciliation/income/${incomeEntryId}`, {
       actualAmount,
       notes,
     });
@@ -63,7 +62,7 @@ export function useReconcileIncome() {
 
 export function useReconcileBill() {
   return async (billInstanceId: string, actualAmount: number, notes?: string) => {
-    await axios.post(`${API}/api/reconciliation/bill/${billInstanceId}`, {
+    await api.post(`/api/reconciliation/bill/${billInstanceId}`, {
       actualAmount,
       notes,
     });
@@ -72,7 +71,7 @@ export function useReconcileBill() {
 
 export function useSetBalance() {
   return async (amount: number) => {
-    await axios.post(`${API}/api/reconciliation/balance`, { amount });
+    await api.post(`/api/reconciliation/balance`, { amount });
   };
 }
 
@@ -96,7 +95,7 @@ export function useClosePeriodPreview(periodId: string | null) {
   return useQuery<ClosePeriodPreview>({
     queryKey: ['closePeriodPreview', periodId],
     queryFn: async () => {
-      const { data } = await axios.get(`${API}/api/pay-periods/${periodId}/close-preview`);
+      const { data } = await api.get(`/api/pay-periods/${periodId}/close-preview`);
       return data;
     },
     enabled: !!periodId,
@@ -110,7 +109,7 @@ export function useClosePeriod() {
       periodId: string;
       discretionaryAmounts: { billTemplateId: string; amount: number }[];
     }) => {
-      const { data } = await axios.post(`${API}/api/pay-periods/${periodId}/close`, { discretionaryAmounts });
+      const { data } = await api.post(`/api/pay-periods/${periodId}/close`, { discretionaryAmounts });
       return data;
     },
     onSuccess: () => {
@@ -132,7 +131,7 @@ export function useReopenPeriod() {
   const qc = useQueryClient();
   return useMutation<ReopenResult, Error, { periodId: string; cascade?: boolean }>({
     mutationFn: async ({ periodId, cascade = false }) => {
-      const { data } = await axios.post(`${API}/api/pay-periods/${periodId}/reopen`, { cascade });
+      const { data } = await api.post(`/api/pay-periods/${periodId}/reopen`, { cascade });
       return data as ReopenResult;
     },
     onSuccess: (data) => {
@@ -149,7 +148,7 @@ export function useMoveInstance() {
   const qc = useQueryClient();
   return useMutation<{ success: boolean; movedToPeriodId: string }, Error, { periodId: string; billInstanceId: string }>({
     mutationFn: async ({ periodId, billInstanceId }) => {
-      const { data } = await axios.post(`${API}/api/pay-periods/${periodId}/move-instance`, { billInstanceId });
+      const { data } = await api.post(`/api/pay-periods/${periodId}/move-instance`, { billInstanceId });
       return data;
     },
     onSuccess: () => {

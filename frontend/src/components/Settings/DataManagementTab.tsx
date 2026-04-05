@@ -1,10 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import axios from 'axios';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSettings } from '../../hooks/useSettings';
 import { useApplyAutoMatchRules } from '../../hooks/useTransactions';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+import api from '../../lib/api';
 
 type ClearTarget = 'reconciliations' | 'instances' | 'snapshots' | 'templates' | 'sources' | 'periods';
 
@@ -105,7 +103,7 @@ function BackupSection() {
   async function handleDownload() {
     setDownloading(true);
     try {
-      const { data } = await axios.get(`${API}/api/backup`, { responseType: 'blob' });
+      const { data } = await api.get(`/api/backup`, { responseType: 'blob' });
       const url = URL.createObjectURL(data);
       const a = document.createElement('a');
       a.href = url;
@@ -144,7 +142,7 @@ function BackupSection() {
     setRestoring(true);
     setError(null);
     try {
-      const { data } = await axios.post(`${API}/api/backup/restore`, {
+      const { data } = await api.post(`/api/backup/restore`, {
         mode: restoreMode,
         backup: pendingBackup,
       });
@@ -425,8 +423,8 @@ function RegenerateModal({ onClose, onDone }: { onClose: () => void; onDone: (ms
     setError(null);
     try {
       // Save settings first, then regenerate
-      await axios.put(`${API}/api/settings`, form);
-      const { data } = await axios.post(`${API}/api/settings/regenerate-periods`);
+      await api.put(`/api/settings`, form);
+      const { data } = await api.post(`/api/settings/regenerate-periods`);
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['payPeriods'] }),
         qc.invalidateQueries({ queryKey: ['billGrid'] }),
@@ -563,7 +561,7 @@ export default function DataManagementTab() {
     setRecalculating(true);
     setRecalcResult(null);
     try {
-      const { data } = await axios.post(`${API}/api/pay-periods/recompute-all`);
+      const { data } = await api.post(`/api/pay-periods/recompute-all`);
       setRecalcResult(`Recalculated ${data.recomputed} balance snapshot${data.recomputed !== 1 ? 's' : ''}.`);
       await qc.invalidateQueries({ queryKey: ['payPeriods'] });
     } catch (err: any) {
@@ -589,7 +587,7 @@ export default function DataManagementTab() {
     setError(null);
     const includedPeriods = selected.has('periods');
     try {
-      const { data } = await axios.post(`${API}/api/admin/clear`, { targets: [...selected] });
+      const { data } = await api.post(`/api/admin/clear`, { targets: [...selected] });
       const parts: string[] = [];
       if (data.summary.billsUnreconciled)  parts.push(`${data.summary.billsUnreconciled} bills un-reconciled`);
       if (data.summary.incomeUnreconciled) parts.push(`${data.summary.incomeUnreconciled} income entries un-reconciled`);

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useClosePeriodPreview, useClosePeriod, type ClosePreviewItem } from '../../hooks/usePayPeriods';
+import { useClosePeriodPreview, useClosePeriod } from '../../hooks/usePayPeriods';
 
 const fmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
