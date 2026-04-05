@@ -58,9 +58,15 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
       : [];
     const existingKeys = new Set(existing.map((e) => e.dedupeKey));
 
-    const newTransactions = rawTransactions.filter(
-      (t) => !t.dedupeKey || !existingKeys.has(t.dedupeKey),
-    );
+    // Filter out keys already in the DB, then deduplicate within this file
+    // (same-file dupes like $0.00 rows with identical date+desc would hit the unique constraint)
+    const seenKeys = new Set<string>(existingKeys);
+    const newTransactions: typeof rawTransactions = [];
+    for (const t of rawTransactions) {
+      if (t.dedupeKey && seenKeys.has(t.dedupeKey)) continue;
+      if (t.dedupeKey) seenKeys.add(t.dedupeKey);
+      newTransactions.push(t);
+    }
     const skippedCount = totalCount - newTransactions.length;
 
     // Create import batch
