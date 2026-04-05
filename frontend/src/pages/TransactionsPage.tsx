@@ -123,12 +123,16 @@ function MatchPicker({
 
   function selectCandidate(c: MatchCandidate) {
     setPendingCandidate(c);
+    const absAmount = Math.abs(transaction.amount);
     setRuleForm({
       pattern: transaction.description,
       matchType: 'CONTAINS',
       targetType: c.type,
       targetId: c.templateId,
       priority: 0,
+      amountOperator: 'EXACT',
+      amountValue: absAmount > 0 ? String(absAmount) : '',
+      amountValue2: '',
     });
   }
 
@@ -148,7 +152,11 @@ function MatchPicker({
 
     if (createRuleFlag) {
       try {
-        await createRule.mutateAsync(ruleForm);
+        await createRule.mutateAsync({
+          ...ruleForm,
+          amountValue: ruleForm.amountValue ? parseFloat(ruleForm.amountValue) : null,
+          amountValue2: ruleForm.amountValue2 ? parseFloat(ruleForm.amountValue2) : null,
+        });
         onRuleCreated?.(ruleForm.pattern, c.name);
         applyRules.mutate(); // run rules against remaining unmatched transactions
       } catch {
@@ -279,6 +287,52 @@ function MatchPicker({
                     onChange={(e) => setRuleForm((f) => ({ ...f, priority: parseInt(e.target.value) || 0 }))}
                     className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white font-mono"
                   />
+                </div>
+
+                {/* Amount filter */}
+                <div className="col-span-2 border-t border-gray-700/50 pt-2">
+                  <label className="block text-xs text-gray-500 mb-1.5">Amount Filter</label>
+                  <div className="flex gap-2 items-center flex-wrap">
+                    <select
+                      value={ruleForm.amountOperator ?? ''}
+                      onChange={(e) => setRuleForm((f) => ({ ...f, amountOperator: (e.target.value || null) as RuleForm['amountOperator'], amountValue2: '' }))}
+                      className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white"
+                    >
+                      <option value="">Any amount</option>
+                      <option value="EXACT">Exactly</option>
+                      <option value="LT">Less than</option>
+                      <option value="LTE">Less than or equal</option>
+                      <option value="GT">Greater than</option>
+                      <option value="GTE">Greater than or equal</option>
+                      <option value="BETWEEN">Between</option>
+                    </select>
+                    {ruleForm.amountOperator && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-gray-500">$</span>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={ruleForm.amountValue}
+                          onChange={(e) => setRuleForm((f) => ({ ...f, amountValue: e.target.value }))}
+                          placeholder="0.00"
+                          className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono"
+                        />
+                        {ruleForm.amountOperator === 'BETWEEN' && (
+                          <>
+                            <span className="text-xs text-gray-500">and $</span>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={ruleForm.amountValue2}
+                              onChange={(e) => setRuleForm((f) => ({ ...f, amountValue2: e.target.value }))}
+                              placeholder="0.00"
+                              className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono"
+                            />
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
