@@ -3,6 +3,8 @@
 // Note: SQLite does not support enums — using String with app-level validation instead.
 // Valid IncomeType values: "W2" | "MONTHLY_RECURRING" | "AD_HOC"
 // Valid BillType values:   "EXPENSE" | "TRANSFER" | "SAVINGS"
+// Valid Account.color:     "blue" | "green" | "purple" | "amber" | "rose" | "teal"
+// Valid Account.periodType: "biweekly" | "monthly"
 
 generator client {
   provider = "prisma-client-js"
@@ -13,9 +15,21 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ── Accounts ──────────────────────────────────────────────────────────────────
+// Each account is fully siloed — no shared templates, rules, transactions, or settings.
+// The default "Personal" account is created with id="personal" during migration.
+model Account {
+  id         String   @id @default(cuid())
+  name       String
+  color      String   @default("blue") // "blue" | "green" | "purple" | "amber" | "rose" | "teal"
+  periodType String   @default("biweekly") // "biweekly" | "monthly"
+  createdAt  DateTime @default(now())
+}
+
 // ── Pay Periods ──────────────────────────────────────────────────────────────
 model PayPeriod {
   id             String   @id @default(cuid())
+  accountId      String   @default("personal")
   startDate      DateTime
   endDate        DateTime
   paydayDate     DateTime
@@ -29,6 +43,7 @@ model PayPeriod {
   billInstances   BillInstance[]
   balanceSnapshot BalanceSnapshot?
 
+  @@index([accountId, paydayDate])
   @@index([paydayDate])
 }
 
@@ -36,10 +51,12 @@ model PayPeriod {
 // type: "W2" | "MONTHLY_RECURRING" | "AD_HOC"
 model IncomeSource {
   id                   String    @id @default(cuid())
+  accountId            String    @default("personal")
   name                 String
   type                 String    // "W2" | "MONTHLY_RECURRING" | "AD_HOC"
   defaultAmount        Float     @default(0)
   dayOfMonth           Int?
+  expectedDayOfMonth   Int?      // for monthly accounts: which day of month this client pays
   startDate            DateTime
   endDate              DateTime?
   isActive             Boolean   @default(true)
@@ -50,11 +67,14 @@ model IncomeSource {
   updatedAt            DateTime  @updatedAt
 
   incomeEntries IncomeEntry[]
+
+  @@index([accountId])
 }
 
 // ── Income Entries ───────────────────────────────────────────────────────────
 model IncomeEntry {
   id              String    @id @default(cuid())
+  accountId       String    @default("personal")
   payPeriodId     String
   incomeSourceId  String
   projectedAmount Float
@@ -70,6 +90,7 @@ model IncomeEntry {
   transactions Transaction[]
 
   @@unique([payPeriodId, incomeSourceId])
+  @@index([accountId])
   @@index([payPeriodId])
   @@index([incomeSourceId])
 }
@@ -78,6 +99,7 @@ model IncomeEntry {
 // billType: "EXPENSE" | "TRANSFER" | "SAVINGS"
 model BillTemplate {
   id              String   @id @default(cuid())
+  accountId       String   @default("personal")
   name            String
   group           String
   billType        String   @default("EXPENSE") // "EXPENSE" | "TRANSFER" | "SAVINGS"
@@ -93,12 +115,15 @@ model BillTemplate {
   billInstances  BillInstance[]
   monthlyAmounts BillMonthlyAmount[]
 
-  @@unique([name])
+  // Unique name per account — allows Personal + Business to both have e.g. "Internet"
+  @@unique([accountId, name])
+  @@index([accountId])
 }
 
 // ── Bill Monthly Amounts ─────────────────────────────────────────────────────
 model BillMonthlyAmount {
   id             String   @id @default(cuid())
+  accountId      String   @default("personal")
   billTemplateId String
   year           Int
   month          Int
@@ -109,12 +134,14 @@ model BillMonthlyAmount {
   billTemplate BillTemplate @relation(fields: [billTemplateId], references: [id], onDelete: Cascade)
 
   @@unique([billTemplateId, year, month])
+  @@index([accountId])
   @@index([billTemplateId])
 }
 
 // ── Bill Instances ───────────────────────────────────────────────────────────
 model BillInstance {
   id              String    @id @default(cuid())
+  accountId       String    @default("personal")
   payPeriodId     String
   billTemplateId  String
   projectedAmount Float
@@ -131,6 +158,7 @@ model BillInstance {
   transactions Transaction[]
 
   @@unique([payPeriodId, billTemplateId])
+  @@index([accountId])
   @@index([payPeriodId])
   @@index([billTemplateId])
 }
@@ -138,6 +166,7 @@ model BillInstance {
 // ── Balance Snapshots ────────────────────────────────────────────────────────
 model BalanceSnapshot {
   id             String   @id @default(cuid())
+  accountId      String   @default("personal")
   payPeriodId    String   @unique
   plannedBalance Float
   runningBalance Float
@@ -148,11 +177,14 @@ model BalanceSnapshot {
   computedAt     DateTime @default(now())
 
   payPeriod PayPeriod @relation(fields: [payPeriodId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
 }
 
 // ── Reconciliation Log ───────────────────────────────────────────────────────
 model ReconciliationLog {
   id              String   @id @default(cuid())
+  accountId       String   @default("personal")
   resourceType    String
   resourceId      String
   action          String
@@ -162,11 +194,14 @@ model ReconciliationLog {
   notes           String?
   createdAt       DateTime @default(now())
 
-  @@index([resourceType, resourceId])
+  @@index([accountId, resourceType, resourceId])
   @@index([createdAt])
 }
 
 // ── App Settings ─────────────────────────────────────────────────────────────
+// Key format: "{accountId}:{settingKey}" — e.g. "personal:billGroups"
+// This preserves the simple string PK while enabling per-account settings.
+// Migration renames all existing bare keys to "personal:{key}".
 model AppSetting {
   key       String   @id
   value     String
@@ -178,6 +213,7 @@ model AppSetting {
 // status: "COMPLETED" | "PARTIAL" | "FAILED"
 model ImportBatch {
   id            String   @id @default(cuid())
+  accountId     String   @default("personal")
   filename      String
   format        String   // "OFX" | "CSV"
   importedAt    DateTime @default(now())
@@ -188,6 +224,8 @@ model ImportBatch {
   status        String   @default("COMPLETED") // "COMPLETED" | "PARTIAL" | "FAILED"
 
   transactions Transaction[]
+
+  @@index([accountId])
 }
 
 // ── Transactions ──────────────────────────────────────────────────────────────
@@ -195,6 +233,7 @@ model ImportBatch {
 // status: "UNMATCHED" | "MATCHED" | "IGNORED"
 model Transaction {
   id              String    @id @default(cuid())
+  accountId       String    @default("personal")
   importBatchId   String?
   dedupeKey       String?   @unique // fitId for OFX; SHA256 hash for CSV; null for manual
   date            DateTime
@@ -214,6 +253,7 @@ model Transaction {
   billInstance BillInstance? @relation(fields: [billInstanceId], references: [id])
   incomeEntry  IncomeEntry?  @relation(fields: [incomeEntryId], references: [id])
 
+  @@index([accountId])
   @@index([date])
   @@index([status])
   @@index([importBatchId])
@@ -226,6 +266,7 @@ model Transaction {
 // targetType: "BILL" | "INCOME"
 model AutoMatchRule {
   id         String   @id @default(cuid())
+  accountId  String   @default("personal")
   pattern    String
   matchType  String   @default("CONTAINS") // "CONTAINS" | "STARTS_WITH" | "REGEX"
   targetType String   // "BILL" | "INCOME"
@@ -235,5 +276,5 @@ model AutoMatchRule {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  @@index([isActive, priority])
+  @@index([accountId, isActive, priority])
 }

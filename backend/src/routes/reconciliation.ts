@@ -99,7 +99,7 @@ router.post('/period/:id/batch', async (req: Request, res: Response) => {
         data: { actualAmount: bill.projectedAmount, isReconciled: true, isFrozen: true, reconciledAt: now },
       });
       await prisma.reconciliationLog.create({
-        data: { resourceType: 'bill', resourceId: bill.id, action: 'reconcile_batch',
+        data: { accountId: req.accountId, resourceType: 'bill', resourceId: bill.id, action: 'reconcile_batch',
           previousValue: bill.projectedAmount, newValue: bill.projectedAmount, periodsAffected: 1 },
       });
     }
@@ -110,7 +110,7 @@ router.post('/period/:id/batch', async (req: Request, res: Response) => {
         data: { actualAmount: entry.projectedAmount, isReconciled: true, reconciledAt: now },
       });
       await prisma.reconciliationLog.create({
-        data: { resourceType: 'income', resourceId: entry.id, action: 'reconcile_batch',
+        data: { accountId: req.accountId, resourceType: 'income', resourceId: entry.id, action: 'reconcile_batch',
           previousValue: entry.projectedAmount, newValue: entry.projectedAmount, periodsAffected: 1 },
       });
     }
@@ -131,7 +131,7 @@ router.post('/balance', async (req: Request, res: Response) => {
     if (typeof amount !== 'number') {
       return res.status(400).json({ error: 'amount (number) is required' });
     }
-    await setCurrentBalance(amount);
+    await setCurrentBalance(amount, req.accountId);
     res.json({ success: true, message: 'Current balance updated and projection recomputed' });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to set balance' });

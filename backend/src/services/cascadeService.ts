@@ -58,6 +58,7 @@ export async function reconcileIncome(payload: ReconcileIncomePayload): Promise<
   // Log the reconciliation
   await prisma.reconciliationLog.create({
     data: {
+      accountId: entry.payPeriod.accountId,
       resourceType: 'income',
       resourceId: incomeEntryId,
       action: 'reconcile',
@@ -122,8 +123,11 @@ export async function unreconcileIncome(incomeEntryId: string): Promise<void> {
     data: { status: 'UNMATCHED', incomeEntryId: null },
   });
 
+  // accountId: cast needed until `prisma generate` reflects schema v2 (added by Phase 5 migration)
+  const incomeAccountId = (entry as any).accountId ?? 'personal';
   await prisma.reconciliationLog.create({
     data: {
+      accountId: incomeAccountId,
       resourceType: 'income',
       resourceId: incomeEntryId,
       action: 'unreconcile',
@@ -167,6 +171,7 @@ export async function reconcileBill(payload: ReconcileBillPayload): Promise<void
 
   await prisma.reconciliationLog.create({
     data: {
+      accountId: (instance as any).accountId ?? 'personal',
       resourceType: 'bill',
       resourceId: billInstanceId,
       action: 'reconcile',
@@ -218,6 +223,7 @@ export async function unreconcileBill(billInstanceId: string): Promise<void> {
 
   await prisma.reconciliationLog.create({
     data: {
+      accountId: (instance as any).accountId ?? 'personal',
       resourceType: 'bill',
       resourceId: billInstanceId,
       action: 'unreconcile',
@@ -234,17 +240,19 @@ export async function unreconcileBill(billInstanceId: string): Promise<void> {
  * Update the opening/current bank balance and recompute the entire projection.
  * This is the "Set Current Balance" action in the UI.
  */
-export async function setCurrentBalance(amount: number): Promise<void> {
-  // Store as an app setting
+export async function setCurrentBalance(amount: number, accountId: string = 'personal'): Promise<void> {
+  const { acctKey } = await import('../middleware/accountContext');
+
+  // Store as an account-scoped app setting
   await prisma.appSetting.upsert({
-    where: { key: 'currentBankBalance' },
-    create: { key: 'currentBankBalance', value: String(amount) },
+    where: { key: acctKey(accountId, 'currentBankBalance') },
+    create: { key: acctKey(accountId, 'currentBankBalance'), value: String(amount) },
     update: { value: String(amount) },
   });
 
-  // Update the opening balance of the first pay period
+  // Update the opening balance of the first pay period for this account
   const firstPeriod = await prisma.payPeriod.findFirst({
-    where: { paydayDate: { gte: new Date() } },
+    where: { accountId, paydayDate: { gte: new Date() } },
     orderBy: { paydayDate: 'asc' },
   });
 
@@ -256,6 +264,7 @@ export async function setCurrentBalance(amount: number): Promise<void> {
 
     await prisma.reconciliationLog.create({
       data: {
+        accountId,
         resourceType: 'balance',
         resourceId: firstPeriod.id,
         action: 'set_balance',

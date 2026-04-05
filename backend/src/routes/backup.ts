@@ -14,16 +14,17 @@ export const BACKUP_SCHEMA_VERSION = 1;
 
 // ── GET /api/backup ────────────────────────────────────────────────────────────
 
-router.get('/', async (_req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const [billTemplates, incomeSources, autoMatchRules, appSettings] = await Promise.all([
       prisma.billTemplate.findMany({
+        where: { accountId: req.accountId },
         orderBy: [{ group: 'asc' }, { sortOrder: 'asc' }],
         include: { monthlyAmounts: { orderBy: [{ year: 'asc' }, { month: 'asc' }] } },
       }),
-      prisma.incomeSource.findMany({ orderBy: { name: 'asc' } }),
-      prisma.autoMatchRule.findMany({ orderBy: { priority: 'desc' } }),
-      prisma.appSetting.findMany({ orderBy: { key: 'asc' } }),
+      prisma.incomeSource.findMany({ where: { accountId: req.accountId }, orderBy: { name: 'asc' } }),
+      prisma.autoMatchRule.findMany({ where: { accountId: req.accountId }, orderBy: { priority: 'desc' } }),
+      prisma.appSetting.findMany({ where: { key: { startsWith: `${req.accountId}:` } }, orderBy: { key: 'asc' } }),
     ]);
 
     // Embed targetName in rules so restore can re-link after IDs change

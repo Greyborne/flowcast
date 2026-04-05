@@ -1,41 +1,47 @@
 import { Router, Request, Response } from 'express';
 import { addWeeks, addDays, addMonths, startOfDay, setDate } from 'date-fns';
 import prisma from '../models/prisma';
-import { recomputeFromPeriod } from '../services/projectionEngine';
+import { recomputeFromPeriod, buildMonthlyPeriods } from '../services/projectionEngine';
 import { broadcast } from '../websocket/wsServer';
+import { acctKey } from '../middleware/accountContext';
 
 const router = Router();
 
-// GET /api/settings — get all app settings
-router.get('/', async (_req: Request, res: Response) => {
+// GET /api/settings — get all app settings for this account
+router.get('/', async (req: Request, res: Response) => {
   try {
-    const settings = await prisma.appSetting.findMany();
-    const map = Object.fromEntries(settings.map((s) => [s.key, s.value]));
+    const prefix = `${req.accountId}:`;
+    const settings = await prisma.appSetting.findMany({ where: { key: { startsWith: prefix } } });
+    // Strip the accountId prefix so the frontend sees plain keys like "billGroups"
+    const map = Object.fromEntries(settings.map((s) => [s.key.slice(prefix.length), s.value]));
     res.json(map);
   } catch {
     res.status(500).json({ error: 'Failed to fetch settings' });
   }
 });
 
-// PUT /api/settings/:key — set a single setting
+// PUT /api/settings/:key — set a single setting (scoped to this account)
 router.put('/:key', async (req: Request, res: Response) => {
   try {
+    const key = acctKey(req.accountId, req.params.key);
     const setting = await prisma.appSetting.upsert({
-      where: { key: req.params.key },
-      create: { key: req.params.key, value: String(req.body.value) },
+      where: { key },
+      create: { key, value: String(req.body.value) },
       update: { value: String(req.body.value) },
     });
-    res.json(setting);
+    // Return using the plain key so the frontend stays consistent
+    res.json({ key: req.params.key, value: setting.value, updatedAt: setting.updatedAt });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// PUT /api/settings — save multiple settings at once
+// PUT /api/settings — save multiple settings at once (scoped to this account)
 router.put('/', async (req: Request, res: Response) => {
   try {
     const entries: Record<string, string> = req.body;
-    for (const [key, value] of Object.entries(entries)) {
+    for (const [plainKey, value] of Object.entries(entries)) {
+      const key = acctKey(req.accountId, plainKey);
       await prisma.appSetting.upsert({
         where: { key },
         create: { key, value: String(value) },
@@ -48,16 +54,24 @@ router.put('/', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/settings/regenerate-periods — rebuild pay periods from anchor + frequency
-router.post('/regenerate-periods', async (_req: Request, res: Response) => {
+// POST /api/settings/regenerate-periods — rebuild pay periods for this account
+router.post('/regenerate-periods', async (req: Request, res: Response) => {
   try {
-    const settingsRows = await prisma.appSetting.findMany();
-    const s = Object.fromEntries(settingsRows.map((r) => [r.key, r.value]));
+    const accountId = req.accountId;
 
-    const anchorDate   = s['payScheduleAnchor'];
-    const frequency    = s['payFrequency'] ?? 'biweekly';
-    const years        = parseInt(s['projectionYears'] ?? '2', 10);
-    const openingBal   = parseFloat(s['currentBankBalance'] ?? '0');
+    // Load account to determine period type
+    const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
+    const isMonthly = account.periodType === 'monthly';
+
+    // Load settings (using account-prefixed keys)
+    const settingsRows = await prisma.appSetting.findMany({ where: { key: { startsWith: `${accountId}:` } } });
+    const prefix = `${accountId}:`;
+    const s = Object.fromEntries(settingsRows.map((r) => [r.key.slice(prefix.length), r.value]));
+
+    const anchorDate  = s['payScheduleAnchor'];
+    const frequency   = isMonthly ? 'monthly' : (s['payFrequency'] ?? 'biweekly');
+    const years       = parseInt(s['projectionYears'] ?? '2', 10);
+    const openingBal  = parseFloat(s['currentBankBalance'] ?? '0');
 
     if (!anchorDate) {
       return res.status(400).json({ error: 'payScheduleAnchor is not set in settings' });
@@ -66,27 +80,31 @@ router.post('/regenerate-periods', async (_req: Request, res: Response) => {
     const anchor = startOfDay(new Date(anchorDate + 'T12:00:00'));
     const totalPeriods = computePeriodCount(frequency, years);
 
-    // Build the target schedule of payday dates
-    const schedule = buildSchedule(anchor, frequency, totalPeriods);
+    // Build schedule — monthly accounts get proper 1st-to-last-day periods
+    let schedule: Date[];
+    let periods: Array<{ startDate: Date; endDate: Date; paydayDate: Date }> = [];
+
+    if (isMonthly) {
+      const anchorYear  = anchor.getFullYear();
+      const anchorMonth = anchor.getMonth() + 1;
+      periods = buildMonthlyPeriods(anchorYear, anchorMonth, totalPeriods);
+      schedule = periods.map((p) => p.paydayDate);
+    } else {
+      schedule = buildBiweeklySchedule(anchor, frequency, totalPeriods);
+    }
 
     // Find periods that have ANY reconciled data — never delete these
     const reconciledPeriodIds = new Set<string>();
-    const reconciledBills = await prisma.billInstance.findMany({
-      where: { isReconciled: true },
-      select: { payPeriodId: true },
-    });
-    const reconciledIncome = await prisma.incomeEntry.findMany({
-      where: { isReconciled: true },
-      select: { payPeriodId: true },
-    });
+    const [reconciledBills, reconciledIncome] = await Promise.all([
+      prisma.billInstance.findMany({ where: { accountId, isReconciled: true }, select: { payPeriodId: true } }),
+      prisma.incomeEntry.findMany({ where: { accountId, isReconciled: true }, select: { payPeriodId: true } }),
+    ]);
     reconciledBills.forEach((b) => reconciledPeriodIds.add(b.payPeriodId));
     reconciledIncome.forEach((e) => reconciledPeriodIds.add(e.payPeriodId));
 
     // Delete existing unreconciled periods not on the new schedule
-    const existingPeriods = await prisma.payPeriod.findMany({
-      orderBy: { paydayDate: 'asc' },
-    });
-    const scheduleSet = new Set(schedule.map((d) => d.toISOString()));
+    const existingPeriods = await prisma.payPeriod.findMany({ where: { accountId }, orderBy: { paydayDate: 'asc' } });
+    const scheduleSet = new Set(schedule.map((d) => startOfDay(d).toISOString()));
     const toDelete = existingPeriods.filter(
       (p) => !reconciledPeriodIds.has(p.id) && !scheduleSet.has(startOfDay(p.paydayDate).toISOString())
     );
@@ -94,49 +112,55 @@ router.post('/regenerate-periods', async (_req: Request, res: Response) => {
       await prisma.payPeriod.deleteMany({ where: { id: { in: toDelete.map((p) => p.id) } } });
     }
 
-    // Find which schedule dates don't yet have a period
     const existingDates = new Set(
-      existingPeriods
-        .filter((p) => !toDelete.find((d) => d.id === p.id))
-        .map((p) => startOfDay(p.paydayDate).toISOString())
+      existingPeriods.filter((p) => !toDelete.find((d) => d.id === p.id)).map((p) => startOfDay(p.paydayDate).toISOString())
     );
-    const toCreate = schedule.filter((d) => !existingDates.has(d.toISOString()));
 
     // Create missing periods
-    const periodLength = getPeriodLengthDays(frequency);
-    if (toCreate.length > 0) {
-      await prisma.payPeriod.createMany({
-        data: toCreate.map((paydayDate) => ({
-          paydayDate,
-          startDate: paydayDate,
-          endDate: addDays(paydayDate, periodLength - 1),
-          openingBalance: 0,
-        })),
-      });
+    let created = 0;
+    if (isMonthly) {
+      const toCreate = periods.filter((p) => !existingDates.has(startOfDay(p.paydayDate).toISOString()));
+      if (toCreate.length > 0) {
+        await prisma.payPeriod.createMany({
+          data: toCreate.map((p) => ({ accountId, paydayDate: p.paydayDate, startDate: p.startDate, endDate: p.endDate, openingBalance: 0 })),
+        });
+        created = toCreate.length;
+        await populateNewMonthlyPeriods(toCreate, accountId);
+      }
+    } else {
+      const toCreateDates = schedule.filter((d) => !existingDates.has(d.toISOString()));
+      const periodLength = getPeriodLengthDays(frequency);
+      if (toCreateDates.length > 0) {
+        await prisma.payPeriod.createMany({
+          data: toCreateDates.map((paydayDate) => ({
+            accountId,
+            paydayDate,
+            startDate: paydayDate,
+            endDate: addDays(paydayDate, periodLength - 1),
+            openingBalance: 0,
+          })),
+        });
+        created = toCreateDates.length;
+        await populateNewPeriods(toCreateDates, periodLength, accountId);
+      }
     }
 
     // Set opening balance on the earliest unreconciled period
     const firstUnreconciled = await prisma.payPeriod.findFirst({
-      where: { id: { notIn: [...reconciledPeriodIds] } },
+      where: { accountId, id: { notIn: [...reconciledPeriodIds] } },
       orderBy: { paydayDate: 'asc' },
     });
     if (firstUnreconciled) {
-      await prisma.payPeriod.update({
-        where: { id: firstUnreconciled.id },
-        data: { openingBalance: openingBal },
-      });
-      // Populate bill instances and income entries for new periods
-      await populateNewPeriods(toCreate, periodLength);
-
+      await prisma.payPeriod.update({ where: { id: firstUnreconciled.id }, data: { openingBalance: openingBal } });
       const affectedIds = await recomputeFromPeriod(firstUnreconciled.id);
       broadcast({ type: 'BALANCE_UPDATE', payPeriodIds: affectedIds });
     }
 
     res.json({
       success: true,
-      created: toCreate.length,
+      created,
       deleted: toDelete.length,
-      message: `Pay periods regenerated: ${toCreate.length} created, ${toDelete.length} removed`,
+      message: `Pay periods regenerated: ${created} created, ${toDelete.length} removed`,
     });
   } catch (err: any) {
     console.error('[regenerate-periods]', err);
@@ -148,14 +172,14 @@ router.post('/regenerate-periods', async (_req: Request, res: Response) => {
 
 function computePeriodCount(frequency: string, years: number): number {
   switch (frequency) {
-    case 'weekly':      return Math.ceil((years * 365) / 7);
-    case 'biweekly':   return Math.ceil((years * 365) / 14);
-    case 'monthly':    return years * 12;
-    default:           return Math.ceil((years * 365) / 14);
+    case 'weekly':    return Math.ceil((years * 365) / 7);
+    case 'biweekly':  return Math.ceil((years * 365) / 14);
+    case 'monthly':   return years * 12;
+    default:          return Math.ceil((years * 365) / 14);
   }
 }
 
-function buildSchedule(anchor: Date, frequency: string, count: number): Date[] {
+function buildBiweeklySchedule(anchor: Date, frequency: string, count: number): Date[] {
   const dates: Date[] = [];
   for (let i = 0; i < count; i++) {
     let d: Date;
@@ -180,62 +204,97 @@ function buildSchedule(anchor: Date, frequency: string, count: number): Date[] {
 
 function getPeriodLengthDays(frequency: string): number {
   switch (frequency) {
-    case 'weekly':    return 7;
-    case 'biweekly':  return 14;
-    case 'monthly':   return 30; // approximate; projection engine handles the real dates
-    default:          return 14;
+    case 'weekly':   return 7;
+    case 'biweekly': return 14;
+    case 'monthly':  return 30;
+    default:         return 14;
   }
 }
 
-/**
- * For newly created pay periods, generate bill instances and income entries
- * using the same logic as the original seed / projection engine.
- */
-async function populateNewPeriods(newPaydays: Date[], periodLength: number): Promise<void> {
+/** For newly created bi-weekly/weekly pay periods: generate bill instances and income entries */
+async function populateNewPeriods(newPaydays: Date[], periodLength: number, accountId: string): Promise<void> {
   if (newPaydays.length === 0) return;
 
   const [activeBills, activeSources] = await Promise.all([
-    prisma.billTemplate.findMany({ where: { isActive: true } }),
-    prisma.incomeSource.findMany({ where: { isActive: true } }),
+    prisma.billTemplate.findMany({ where: { accountId, isActive: true } }),
+    prisma.incomeSource.findMany({ where: { accountId, isActive: true } }),
   ]);
 
-  // Dynamically import helpers to avoid circular deps
   const { billFallsInPeriod, getBillAmountForMonth, incomeFallsInPeriod } = await import('../services/projectionEngine');
 
   for (const payday of newPaydays) {
-    const period = await prisma.payPeriod.findFirst({
-      where: { paydayDate: payday },
-    });
+    const period = await prisma.payPeriod.findFirst({ where: { accountId, paydayDate: payday } });
     if (!period) continue;
 
-    const periodStart = period.startDate;
-    const periodEnd   = period.endDate;
     const year  = payday.getFullYear();
     const month = payday.getMonth() + 1;
 
-    // Create bill instances for bills that fall in this period
     for (const bill of activeBills) {
-      if (bill.dueDayOfMonth === null) continue; // discretionary — no fixed due date
-      if (!billFallsInPeriod(bill.dueDayOfMonth, periodStart, periodEnd)) continue;
-
+      if (bill.dueDayOfMonth === null) continue;
+      if (!billFallsInPeriod(bill.dueDayOfMonth, period.startDate, period.endDate)) continue;
       const amount = await getBillAmountForMonth(bill.id, year, month);
       await prisma.billInstance.upsert({
         where: { payPeriodId_billTemplateId: { payPeriodId: period.id, billTemplateId: bill.id } },
-        create: { payPeriodId: period.id, billTemplateId: bill.id, projectedAmount: amount },
+        create: { accountId, payPeriodId: period.id, billTemplateId: bill.id, projectedAmount: amount },
         update: {},
       });
     }
 
-    // Create income entries — MONTHLY_RECURRING sources only land in the period
-    // where their dayOfMonth falls (mirrors bill due-day logic).
-    // W2 and AD_HOC sources appear in every period.
     for (const source of activeSources) {
       if (source.type === 'MONTHLY_RECURRING' && source.dayOfMonth !== null) {
-        if (!incomeFallsInPeriod(source.dayOfMonth, periodStart, periodEnd)) continue;
+        if (!incomeFallsInPeriod(source.dayOfMonth, period.startDate, period.endDate)) continue;
       }
+      if (source.type === 'AD_HOC') continue;
       await prisma.incomeEntry.upsert({
         where: { payPeriodId_incomeSourceId: { payPeriodId: period.id, incomeSourceId: source.id } },
-        create: { payPeriodId: period.id, incomeSourceId: source.id, projectedAmount: source.defaultAmount },
+        create: { accountId, payPeriodId: period.id, incomeSourceId: source.id, projectedAmount: source.defaultAmount },
+        update: {},
+      });
+    }
+  }
+}
+
+/** For newly created monthly periods: generate bill instances and income entries.
+ *  Monthly periods cover 1st–last day of month, so bills due any day fall in the period.
+ *  Income sources use expectedDayOfMonth for business clients.
+ */
+async function populateNewMonthlyPeriods(
+  newPeriods: Array<{ startDate: Date; endDate: Date; paydayDate: Date }>,
+  accountId: string
+): Promise<void> {
+  if (newPeriods.length === 0) return;
+
+  const [activeBills, activeSources] = await Promise.all([
+    prisma.billTemplate.findMany({ where: { accountId, isActive: true } }),
+    prisma.incomeSource.findMany({ where: { accountId, isActive: true } }),
+  ]);
+
+  for (const { paydayDate } of newPeriods) {
+    const period = await prisma.payPeriod.findFirst({ where: { accountId, paydayDate } });
+    if (!period) continue;
+
+    // In a monthly period every fixed bill falls in — the whole month is covered
+    for (const bill of activeBills) {
+      if (bill.dueDayOfMonth === null && !bill.isDiscretionary) continue; // skip truly discretionary
+      if (bill.isDiscretionary) continue;
+      const year  = paydayDate.getFullYear();
+      const month = paydayDate.getMonth() + 1;
+      const amount = await prisma.billMonthlyAmount
+        .findUnique({ where: { billTemplateId_year_month: { billTemplateId: bill.id, year, month } } })
+        .then((m) => m?.amount ?? bill.defaultAmount);
+      await prisma.billInstance.upsert({
+        where: { payPeriodId_billTemplateId: { payPeriodId: period.id, billTemplateId: bill.id } },
+        create: { accountId, payPeriodId: period.id, billTemplateId: bill.id, projectedAmount: amount },
+        update: {},
+      });
+    }
+
+    // Every active income source gets one entry per monthly period
+    for (const source of activeSources) {
+      if (source.type === 'AD_HOC') continue;
+      await prisma.incomeEntry.upsert({
+        where: { payPeriodId_incomeSourceId: { payPeriodId: period.id, incomeSourceId: source.id } },
+        create: { accountId, payPeriodId: period.id, incomeSourceId: source.id, projectedAmount: source.defaultAmount },
         update: {},
       });
     }

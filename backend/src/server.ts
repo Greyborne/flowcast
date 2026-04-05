@@ -5,6 +5,7 @@ import morgan from 'morgan';
 import { createServer } from 'http';
 import { initWebSocketServer } from './websocket/wsServer';
 import { errorHandler } from './middleware/errorHandler';
+import { accountMiddleware, initAccountCache, acctKey } from './middleware/accountContext';
 import prisma from './models/prisma';
 import { recomputeFromPeriod, billFallsInPeriod } from './services/projectionEngine';
 
@@ -17,6 +18,7 @@ import settingsRouter from './routes/settings';
 import adminRouter from './routes/admin';
 import transactionsRouter from './routes/transactions';
 import backupRouter from './routes/backup';
+import accountsRouter from './routes/accounts';
 
 const app = express();
 const httpServer = createServer(app);
@@ -29,6 +31,13 @@ app.use(morgan('dev'));
 
 // ── Health Check ─────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+
+// ── Accounts (no account middleware — used to list/create accounts) ───────────
+app.use('/api/accounts', accountsRouter);
+
+// ── Account context middleware — applies to all other API routes ──────────────
+// Reads X-Account-Id header; falls back to "personal" for backward compat.
+app.use('/api', accountMiddleware);
 
 // ── API Routes ───────────────────────────────────────────────────────────────
 app.use('/api/pay-periods', payPeriodsRouter);
@@ -47,88 +56,131 @@ app.use(errorHandler);
 initWebSocketServer(httpServer);
 
 // ── Schema Migrations (safe, idempotent) ────────────────────────────────────
-
 /**
- * Applies lightweight column additions without touching existing data.
- * Each migration is a no-op if the column already exists.
+ * Applies lightweight schema additions without touching existing data.
+ * Each migration is a no-op if the column/table already exists.
+ * Order matters: Account table must exist before accountId columns are added.
  */
 async function runMigrations() {
-  // v2: add actualBalance to BalanceSnapshot (reconciled-actuals-only balance)
+  // v1: actualBalance column on BalanceSnapshot
   try {
     await prisma.$executeRaw`ALTER TABLE "BalanceSnapshot" ADD COLUMN "actualBalance" REAL NOT NULL DEFAULT 0`;
-    console.log('🔧 Migration: added actualBalance column to BalanceSnapshot');
-  } catch {
-    // Column already exists — this is expected on all subsequent startups
+    console.log('🔧 Migration v1: added actualBalance to BalanceSnapshot');
+  } catch { /* already exists */ }
+
+  // v2: Phase 5 — Account table
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "Account" (
+        "id"         TEXT     NOT NULL PRIMARY KEY,
+        "name"       TEXT     NOT NULL,
+        "color"      TEXT     NOT NULL DEFAULT 'blue',
+        "periodType" TEXT     NOT NULL DEFAULT 'biweekly',
+        "createdAt"  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('🔧 Migration v2: created Account table');
+  } catch { /* already exists */ }
+
+  // v2a: Insert the default "Personal" account (idempotent)
+  try {
+    await prisma.$executeRaw`
+      INSERT OR IGNORE INTO "Account" ("id", "name", "color", "periodType", "createdAt")
+      VALUES ('personal', 'Personal', 'blue', 'biweekly', CURRENT_TIMESTAMP)
+    `;
+  } catch { /* already inserted */ }
+
+  // v2b: Add accountId to all data tables (DEFAULT 'personal' backfills existing rows)
+  const tablesNeedingAccountId = [
+    'PayPeriod', 'IncomeSource', 'IncomeEntry', 'BillTemplate',
+    'BillMonthlyAmount', 'BillInstance', 'BalanceSnapshot',
+    'ReconciliationLog', 'ImportBatch', 'Transaction', 'AutoMatchRule',
+  ];
+
+  for (const table of tablesNeedingAccountId) {
+    try {
+      await prisma.$executeRawUnsafe(
+        `ALTER TABLE "${table}" ADD COLUMN "accountId" TEXT NOT NULL DEFAULT 'personal'`
+      );
+      console.log(`🔧 Migration v2b: added accountId to ${table}`);
+    } catch { /* column already exists */ }
+  }
+
+  // v2c: Add expectedDayOfMonth to IncomeSource
+  try {
+    await prisma.$executeRaw`ALTER TABLE "IncomeSource" ADD COLUMN "expectedDayOfMonth" INTEGER`;
+    console.log('🔧 Migration v2c: added expectedDayOfMonth to IncomeSource');
+  } catch { /* already exists */ }
+
+  // v2d: Migrate AppSetting keys to account-prefixed format (e.g. "billGroups" → "personal:billGroups")
+  // Only migrates keys that don't already contain a colon (not yet prefixed).
+  try {
+    const count = await prisma.$executeRaw`
+      UPDATE "AppSetting"
+      SET "key" = 'personal:' || "key"
+      WHERE "key" NOT LIKE '%:%'
+    `;
+    if (count > 0) console.log(`🔧 Migration v2d: prefixed ${count} AppSetting keys with 'personal:'`);
+  } catch (err) {
+    console.error('Migration v2d failed:', err);
   }
 }
 
 // ── Initial Projection Compute ───────────────────────────────────────────────
-
 /**
  * Materializes BillInstance and IncomeEntry rows for all pay periods.
- * Only runs once — skipped if instances already exist.
+ * Now account-scoped: iterates each account's periods and templates separately.
  */
 async function ensureInstances() {
+  // Only runs if NO instances exist at all (fresh DB)
   const existingCount = await prisma.billInstance.count();
   if (existingCount > 0) return;
 
   console.log('🔨 Materializing bill instances and income entries...');
 
-  const [periods, billTemplates, incomeSources] = await Promise.all([
-    prisma.payPeriod.findMany({ orderBy: { paydayDate: 'asc' } }),
-    prisma.billTemplate.findMany({ where: { isActive: true } }),
-    prisma.incomeSource.findMany({ where: { isActive: true } }),
-  ]);
+  const accounts = await prisma.account.findMany();
+  let totalBills = 0;
+  let totalIncome = 0;
 
-  let billCount = 0;
-  let incomeCount = 0;
+  for (const account of accounts) {
+    const [periods, billTemplates, incomeSources] = await Promise.all([
+      prisma.payPeriod.findMany({ where: { accountId: account.id }, orderBy: { paydayDate: 'asc' } }),
+      prisma.billTemplate.findMany({ where: { accountId: account.id, isActive: true } }),
+      prisma.incomeSource.findMany({ where: { accountId: account.id, isActive: true } }),
+    ]);
 
-  for (const period of periods) {
-    // Bill instances: assign bills with a due day using billFallsInPeriod logic
-    for (const template of billTemplates) {
-      if (template.dueDayOfMonth == null) continue; // discretionary/savings: skip
-      if (!billFallsInPeriod(template.dueDayOfMonth, period.startDate, period.endDate)) continue;
+    for (const period of periods) {
+      for (const template of billTemplates) {
+        if (template.dueDayOfMonth == null) continue;
+        if (!billFallsInPeriod(template.dueDayOfMonth, period.startDate, period.endDate)) continue;
 
-      await prisma.billInstance.upsert({
-        where: { payPeriodId_billTemplateId: { payPeriodId: period.id, billTemplateId: template.id } },
-        create: {
-          payPeriodId: period.id,
-          billTemplateId: template.id,
-          projectedAmount: template.defaultAmount,
-        },
-        update: {},
-      });
-      billCount++;
-    }
+        await prisma.billInstance.upsert({
+          where: { payPeriodId_billTemplateId: { payPeriodId: period.id, billTemplateId: template.id } },
+          create: { accountId: account.id, payPeriodId: period.id, billTemplateId: template.id, projectedAmount: template.defaultAmount },
+          update: {},
+        });
+        totalBills++;
+      }
 
-    // Income entries: W2 gets one entry per period; MONTHLY_RECURRING gets one per period
-    for (const source of incomeSources) {
-      if (source.type === 'AD_HOC') continue;
-
-      await prisma.incomeEntry.upsert({
-        where: { payPeriodId_incomeSourceId: { payPeriodId: period.id, incomeSourceId: source.id } },
-        create: {
-          payPeriodId: period.id,
-          incomeSourceId: source.id,
-          projectedAmount: source.defaultAmount,
-        },
-        update: {},
-      });
-      incomeCount++;
+      for (const source of incomeSources) {
+        if (source.type === 'AD_HOC') continue;
+        await prisma.incomeEntry.upsert({
+          where: { payPeriodId_incomeSourceId: { payPeriodId: period.id, incomeSourceId: source.id } },
+          create: { accountId: account.id, payPeriodId: period.id, incomeSourceId: source.id, projectedAmount: source.defaultAmount },
+          update: {},
+        });
+        totalIncome++;
+      }
     }
   }
 
-  // Wipe any snapshots that may have been computed before instances existed (all zeros)
   await prisma.balanceSnapshot.deleteMany({});
-
-  console.log(`✅ Created ${billCount} bill instances, ${incomeCount} income entries.\n`);
+  console.log(`✅ Created ${totalBills} bill instances, ${totalIncome} income entries.\n`);
 }
 
 async function ensureSnapshots() {
   const snapshotCount = await prisma.balanceSnapshot.count();
 
-  // Check if actualBalance column was just added (all zeros despite non-zero running balances)
-  // This happens on the first restart after the schema migration that added actualBalance.
   if (snapshotCount > 0) {
     const needsRecompute = await prisma.balanceSnapshot.findFirst({
       where: { actualBalance: 0, runningBalance: { not: 0 } },
@@ -139,11 +191,22 @@ async function ensureSnapshots() {
     console.log('📐 No balance snapshots found — computing initial projections...');
   }
 
-  const firstPeriod = await prisma.payPeriod.findFirst({ orderBy: { paydayDate: 'asc' } });
-  if (!firstPeriod) return;
+  // Recompute for each account's first period
+  const accounts = await prisma.account.findMany();
+  let total = 0;
 
-  const affected = await recomputeFromPeriod(firstPeriod.id);
-  console.log(`✅ Computed ${affected.length} balance snapshots.\n`);
+  for (const account of accounts) {
+    const firstPeriod = await prisma.payPeriod.findFirst({
+      where: { accountId: account.id },
+      orderBy: { paydayDate: 'asc' },
+    });
+    if (!firstPeriod) continue;
+
+    const affected = await recomputeFromPeriod(firstPeriod.id);
+    total += affected.length;
+  }
+
+  console.log(`✅ Computed ${total} balance snapshots.\n`);
 }
 
 // ── Start ────────────────────────────────────────────────────────────────────
@@ -153,6 +216,7 @@ httpServer.listen(PORT, async () => {
   console.log(`🔌 WebSocket server running on ws://localhost:${PORT}`);
   console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}\n`);
   await runMigrations();
+  await initAccountCache();       // Prime the in-memory account ID cache
   await ensureInstances();
   await ensureSnapshots();
 });

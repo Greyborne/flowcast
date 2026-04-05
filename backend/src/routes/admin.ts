@@ -39,18 +39,18 @@ router.post('/clear', async (req: Request, res: Response) => {
     if (targets.includes('reconciliations')) {
       const [bills, entries, txns, logs] = await Promise.all([
         prisma.billInstance.updateMany({
-          where: { isReconciled: true },
+          where: { accountId: req.accountId, isReconciled: true },
           data: { isReconciled: false, isFrozen: false, actualAmount: null, reconciledAt: null },
         }),
         prisma.incomeEntry.updateMany({
-          where: { isReconciled: true },
+          where: { accountId: req.accountId, isReconciled: true },
           data: { isReconciled: false, actualAmount: null, reconciledAt: null },
         }),
         prisma.transaction.updateMany({
-          where: { status: 'MATCHED' },
+          where: { accountId: req.accountId, status: 'MATCHED' },
           data: { status: 'UNMATCHED', billInstanceId: null, incomeEntryId: null },
         }),
-        prisma.reconciliationLog.deleteMany({}),
+        prisma.reconciliationLog.deleteMany({ where: { accountId: req.accountId } }),
       ]);
       summary.billsUnreconciled = bills.count;
       summary.incomeUnreconciled = entries.count;
@@ -61,8 +61,8 @@ router.post('/clear', async (req: Request, res: Response) => {
     // ── 2. Periods — cascades everything (instances, entries, snapshots, logs) ─
     if (targets.includes('periods')) {
       // ReconciliationLog has no FK — must delete manually first
-      const logs = await prisma.reconciliationLog.deleteMany({});
-      const periods = await prisma.payPeriod.deleteMany({});
+      const logs = await prisma.reconciliationLog.deleteMany({ where: { accountId: req.accountId } });
+      const periods = await prisma.payPeriod.deleteMany({ where: { accountId: req.accountId } });
       summary.periodsDeleted = periods.count;
       summary.logsDeletedWithPeriods = logs.count;
       // Nothing left to recompute — broadcast empty
@@ -72,26 +72,26 @@ router.post('/clear', async (req: Request, res: Response) => {
 
     // ── 3. Templates — cascades BillInstances and BillMonthlyAmounts ──────────
     if (targets.includes('templates')) {
-      await prisma.reconciliationLog.deleteMany({ where: { resourceType: 'bill' } });
-      const templates = await prisma.billTemplate.deleteMany({});
+      await prisma.reconciliationLog.deleteMany({ where: { accountId: req.accountId, resourceType: 'bill' } });
+      const templates = await prisma.billTemplate.deleteMany({ where: { accountId: req.accountId } });
       summary.templatesDeleted = templates.count;
       // BillInstances cascade-deleted via FK
     }
 
     // ── 4. Sources — cascades IncomeEntries ───────────────────────────────────
     if (targets.includes('sources')) {
-      await prisma.reconciliationLog.deleteMany({ where: { resourceType: 'income' } });
-      const sources = await prisma.incomeSource.deleteMany({});
+      await prisma.reconciliationLog.deleteMany({ where: { accountId: req.accountId, resourceType: 'income' } });
+      const sources = await prisma.incomeSource.deleteMany({ where: { accountId: req.accountId } });
       summary.sourcesDeleted = sources.count;
       // IncomeEntries cascade-deleted via FK
     }
 
     // ── 5. Instances — delete all bill instances + income entries ─────────────
     if (targets.includes('instances') && !targets.includes('templates') && !targets.includes('sources')) {
-      await prisma.reconciliationLog.deleteMany({});
+      await prisma.reconciliationLog.deleteMany({ where: { accountId: req.accountId } });
       const [bills, income] = await Promise.all([
-        prisma.billInstance.deleteMany({}),
-        prisma.incomeEntry.deleteMany({}),
+        prisma.billInstance.deleteMany({ where: { accountId: req.accountId } }),
+        prisma.incomeEntry.deleteMany({ where: { accountId: req.accountId } }),
       ]);
       summary.instancesDeleted = bills.count;
       summary.entriesDeleted = income.count;
@@ -99,12 +99,12 @@ router.post('/clear', async (req: Request, res: Response) => {
 
     // ── 6. Snapshots — wipe balance history ───────────────────────────────────
     if (targets.includes('snapshots')) {
-      const snaps = await prisma.balanceSnapshot.deleteMany({});
+      const snaps = await prisma.balanceSnapshot.deleteMany({ where: { accountId: req.accountId } });
       summary.snapshotsDeleted = snaps.count;
     }
 
     // ── Recompute projections if periods still exist ───────────────────────────
-    const firstPeriod = await prisma.payPeriod.findFirst({ orderBy: { paydayDate: 'asc' } });
+    const firstPeriod = await prisma.payPeriod.findFirst({ where: { accountId: req.accountId }, orderBy: { paydayDate: 'asc' } });
     if (firstPeriod) {
       const affected = await recomputeFromPeriod(firstPeriod.id);
       broadcast({ type: 'BALANCE_UPDATE', payPeriodIds: affected });
