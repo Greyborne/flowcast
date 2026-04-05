@@ -151,31 +151,45 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
       created.push({ ...txn, payPeriodId: null });
     }
 
-    // Auto-reconcile matched instances
+    // Auto-reconcile matched instances — always sum ALL linked transactions so
+    // multiple imports matching the same instance accumulate correctly.
     const affectedPeriodIds = new Set<string>();
+    const reconciledBillIds = new Set<string>();
+    const reconciledEntryIds = new Set<string>();
+
     for (const txn of created) {
-      if (txn.billInstanceId) {
-        const inst = await prisma.billInstance.findUnique({ where: { id: txn.billInstanceId } });
-        if (inst && !inst.isReconciled) {
-          const tx = await prisma.transaction.findFirst({ where: { billInstanceId: txn.billInstanceId }, select: { amount: true } });
-          await prisma.billInstance.update({
-            where: { id: txn.billInstanceId },
-            data: { isReconciled: true, actualAmount: tx ? Math.abs(tx.amount) : inst.projectedAmount, reconciledAt: new Date() },
-          });
-          affectedPeriodIds.add(inst.payPeriodId);
-        }
-      }
-      if (txn.incomeEntryId) {
-        const entry = await prisma.incomeEntry.findUnique({ where: { id: txn.incomeEntryId } });
-        if (entry && !entry.isReconciled) {
-          const tx = await prisma.transaction.findFirst({ where: { incomeEntryId: txn.incomeEntryId }, select: { amount: true } });
-          await prisma.incomeEntry.update({
-            where: { id: txn.incomeEntryId },
-            data: { isReconciled: true, actualAmount: tx ? Math.abs(tx.amount) : entry.projectedAmount, reconciledAt: new Date() },
-          });
-          affectedPeriodIds.add(entry.payPeriodId);
-        }
-      }
+      if (txn.billInstanceId) reconciledBillIds.add(txn.billInstanceId);
+      if (txn.incomeEntryId)  reconciledEntryIds.add(txn.incomeEntryId);
+    }
+
+    for (const billInstanceId of reconciledBillIds) {
+      const inst = await prisma.billInstance.findUnique({ where: { id: billInstanceId } });
+      if (!inst) continue;
+      const linked = await prisma.transaction.findMany({
+        where: { billInstanceId },
+        select: { amount: true },
+      });
+      const totalActual = linked.reduce((sum, t) => sum + Math.abs(t.amount), 0);
+      await prisma.billInstance.update({
+        where: { id: billInstanceId },
+        data: { isReconciled: true, actualAmount: totalActual, reconciledAt: inst.reconciledAt ?? new Date() },
+      });
+      affectedPeriodIds.add(inst.payPeriodId);
+    }
+
+    for (const incomeEntryId of reconciledEntryIds) {
+      const entry = await prisma.incomeEntry.findUnique({ where: { id: incomeEntryId } });
+      if (!entry) continue;
+      const linked = await prisma.transaction.findMany({
+        where: { incomeEntryId },
+        select: { amount: true },
+      });
+      const totalActual = linked.reduce((sum, t) => sum + Math.abs(t.amount), 0);
+      await prisma.incomeEntry.update({
+        where: { id: incomeEntryId },
+        data: { isReconciled: true, actualAmount: totalActual, reconciledAt: entry.reconciledAt ?? new Date() },
+      });
+      affectedPeriodIds.add(entry.payPeriodId);
     }
 
     // Update batch counts
