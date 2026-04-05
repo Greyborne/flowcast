@@ -30,7 +30,6 @@ export default function ProjectionGrid() {
   const { data: billGrid,   isLoading: billsLoading   } = useBillGrid();
   const { data: incomeGrid, isLoading: incomeLoading  } = useIncomeGrid();
 
-  const [visibleCount,     setVisibleCount]     = useState(12);
   const [activeCell,       setActiveCell]       = useState<ActiveCell>(null);
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
   const createAdhoc = useCreateAdhocBill();
@@ -65,7 +64,7 @@ export default function ProjectionGrid() {
     );
   }
 
-  const visiblePeriods  = periods.slice(0, visibleCount);
+  const visiblePeriods  = periods; // show all periods — no pagination
   const selectedPeriod  = selectedPeriodId
     ? periods.find((p) => p.id === selectedPeriodId) ?? null
     : null;
@@ -95,13 +94,13 @@ export default function ProjectionGrid() {
           2-Year Cash Flow Projection
         </h2>
         <span className="text-xs text-gray-600">
-          Showing {visibleCount} of {periods.length} pay periods
+          {periods.length} pay periods
         </span>
       </div>
 
       {/* ── Grid ── */}
       <div className="flex-1 min-h-0 overflow-auto rounded-xl border border-gray-800">
-        <table className="min-w-full text-sm">
+        <table className="w-auto text-sm">
 
           {/* ── Date header row — sticky top ── */}
           <thead>
@@ -116,7 +115,7 @@ export default function ProjectionGrid() {
                   <th
                     key={p.id}
                     onClick={() => togglePeriod(p.id)}
-                    className={`sticky ${THEAD_H} z-20 py-3 px-4 text-center text-xs whitespace-nowrap min-w-[110px] cursor-pointer transition-colors select-none border-b-2 ${
+                    className={`sticky ${THEAD_H} z-20 py-3 px-4 text-center text-xs whitespace-nowrap cursor-pointer transition-colors select-none border-b-2 ${
                       isSel
                         ? 'bg-blue-900 text-blue-300 border-blue-500'
                         : isNegative
@@ -214,17 +213,6 @@ export default function ProjectionGrid() {
         </table>
       </div>
 
-      {/* ── Load more ── */}
-      {visibleCount < periods.length && (
-        <div className="mt-4 text-center">
-          <button
-            onClick={() => setVisibleCount((c) => Math.min(c + 13, periods.length))}
-            className="text-sm text-blue-400 hover:text-blue-300 border border-gray-700 hover:border-gray-600 px-4 py-2 rounded-lg transition-colors"
-          >
-            Load next 6 months →
-          </button>
-        </div>
-      )}
 
       {/* ── Period detail panel ── */}
       {selectedPeriod && billGrid && incomeGrid && (
