@@ -65,7 +65,7 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
 
     // Create import batch
     const batch = await prisma.importBatch.create({
-      data: { filename, format, totalCount, skippedCount, status: 'COMPLETED' },
+      data: { accountId: req.accountId, filename, format, totalCount, skippedCount, status: 'COMPLETED' },
     });
 
     // Auto-match each transaction
@@ -73,7 +73,7 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
     const created: { id: string; billInstanceId: string | null; incomeEntryId: string | null; payPeriodId: string | null }[] = [];
 
     for (const t of newTransactions) {
-      const match = await findAutoMatch(t.description);
+      const match = await findAutoMatch(t.description, req.accountId);
       let billInstanceId: string | null = null;
       let incomeEntryId: string | null = null;
       let status = 'UNMATCHED';
@@ -83,6 +83,7 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
           // Find the nearest unreconciled bill instance for this template
           const inst = await prisma.billInstance.findFirst({
             where: {
+              accountId: req.accountId,
               billTemplateId: match.targetId,
               isReconciled: false,
               payPeriod: {
@@ -103,6 +104,7 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
         } else {
           const entry = await prisma.incomeEntry.findFirst({
             where: {
+              accountId: req.accountId,
               incomeSourceId: match.targetId,
               isReconciled: false,
               payPeriod: {
@@ -125,6 +127,7 @@ router.post('/import', upload.single('file'), async (req: Request, res: Response
 
       const txn = await prisma.transaction.create({
         data: {
+          accountId: req.accountId,
           importBatchId: batch.id,
           dedupeKey: t.dedupeKey,
           date: t.date,
@@ -245,7 +248,7 @@ router.get('/:id/candidates', async (req: Request, res: Response) => {
   try {
     const txn = await prisma.transaction.findUniqueOrThrow({ where: { id: req.params.id } });
     const search = typeof req.query.search === 'string' ? req.query.search : undefined;
-    const candidates = await findMatchCandidates(txn.date, txn.amount, search);
+    const candidates = await findMatchCandidates(txn.date, txn.amount, req.accountId, search);
     res.json(candidates);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -372,7 +375,7 @@ router.patch('/:id/match', async (req: Request, res: Response) => {
 
       const entry = await prisma.incomeEntry.upsert({
         where: { payPeriodId_incomeSourceId: { payPeriodId: period.id, incomeSourceId: source.id } },
-        create: { payPeriodId: period.id, incomeSourceId: source.id, projectedAmount: source.defaultAmount },
+        create: { accountId: req.accountId, payPeriodId: period.id, incomeSourceId: source.id, projectedAmount: source.defaultAmount },
         update: {},
       });
       resolvedIncomeEntryId = entry.id;
@@ -517,7 +520,7 @@ router.post('/manual', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'date, amount, description required' });
     }
     const txn = await prisma.transaction.create({
-      data: { date: new Date(date), amount, description, memo, notes, source: 'MANUAL', status: 'UNMATCHED' },
+      data: { accountId: req.accountId, date: new Date(date), amount, description, memo, notes, source: 'MANUAL', status: 'UNMATCHED' },
     });
     res.status(201).json(txn);
   } catch (err: any) {
@@ -568,9 +571,10 @@ router.delete('/:id', async (req: Request, res: Response) => {
 // ── Import Batches ────────────────────────────────────────────────────────────
 
 // GET /api/transactions/batches
-router.get('/batches', async (_req: Request, res: Response) => {
+router.get('/batches', async (req: Request, res: Response) => {
   try {
     const batches = await prisma.importBatch.findMany({
+      where: { accountId: req.accountId },
       orderBy: { importedAt: 'desc' },
       include: { _count: { select: { transactions: true } } },
     });
@@ -677,7 +681,7 @@ router.post('/rules/apply', async (req: Request, res: Response) => {
     const affectedPeriodIds = new Set<string>();
 
     for (const txn of unmatched) {
-      const match = await findAutoMatch(txn.description);
+      const match = await findAutoMatch(txn.description, req.accountId);
       if (!match) continue;
 
       // Match to the period that CONTAINS the transaction date — same logic as income.
@@ -685,10 +689,10 @@ router.post('/rules/apply', async (req: Request, res: Response) => {
       // instance rather than spilling into the next period (the old pickClosest bug).
       if (match.targetType === 'BILL') {
         const period = await prisma.payPeriod.findFirst({
-          where: { startDate: { lte: txn.date }, endDate: { gte: txn.date } },
+          where: { accountId: req.accountId, startDate: { lte: txn.date }, endDate: { gte: txn.date } },
         }) ?? await prisma.payPeriod.findFirst({
-          where: { paydayDate: { gte: txn.date } }, orderBy: { paydayDate: 'asc' },
-        }) ?? await prisma.payPeriod.findFirst({ orderBy: { paydayDate: 'desc' } });
+          where: { accountId: req.accountId, paydayDate: { gte: txn.date } }, orderBy: { paydayDate: 'asc' },
+        }) ?? await prisma.payPeriod.findFirst({ where: { accountId: req.accountId }, orderBy: { paydayDate: 'desc' } });
 
         if (!period) continue;
         if (period.isClosed) continue; // Never post to a closed period
@@ -700,7 +704,7 @@ router.post('/rules/apply', async (req: Request, res: Response) => {
         // share one bucket, same as income entries.
         const inst = await prisma.billInstance.upsert({
           where: { payPeriodId_billTemplateId: { payPeriodId: period.id, billTemplateId: template.id } },
-          create: { payPeriodId: period.id, billTemplateId: template.id, projectedAmount: template.defaultAmount, isReconciled: false, isFrozen: false },
+          create: { accountId: req.accountId, payPeriodId: period.id, billTemplateId: template.id, projectedAmount: template.defaultAmount, isReconciled: false, isFrozen: false },
           update: {},
         });
 
@@ -722,10 +726,10 @@ router.post('/rules/apply', async (req: Request, res: Response) => {
         // Income: match to the period that CONTAINS the transaction date, not just nearest payday.
         // This ensures a transaction on Mar 11 lands in the Feb 26–Mar 11 period, not Mar 12.
         const period = await prisma.payPeriod.findFirst({
-          where: { startDate: { lte: txn.date }, endDate: { gte: txn.date } },
+          where: { accountId: req.accountId, startDate: { lte: txn.date }, endDate: { gte: txn.date } },
         }) ?? await prisma.payPeriod.findFirst({
-          where: { paydayDate: { gte: txn.date } }, orderBy: { paydayDate: 'asc' },
-        }) ?? await prisma.payPeriod.findFirst({ orderBy: { paydayDate: 'desc' } });
+          where: { accountId: req.accountId, paydayDate: { gte: txn.date } }, orderBy: { paydayDate: 'asc' },
+        }) ?? await prisma.payPeriod.findFirst({ where: { accountId: req.accountId }, orderBy: { paydayDate: 'desc' } });
 
         if (!period) continue;
         if (period.isClosed) continue; // Never post to a closed period
@@ -736,7 +740,7 @@ router.post('/rules/apply', async (req: Request, res: Response) => {
 
         const entry = await prisma.incomeEntry.upsert({
           where: { payPeriodId_incomeSourceId: { payPeriodId: period.id, incomeSourceId: source.id } },
-          create: { payPeriodId: period.id, incomeSourceId: source.id, projectedAmount: source.defaultAmount },
+          create: { accountId: req.accountId, payPeriodId: period.id, incomeSourceId: source.id, projectedAmount: source.defaultAmount },
           update: {},
         });
 
@@ -778,9 +782,9 @@ router.post('/rules/apply', async (req: Request, res: Response) => {
 });
 
 // GET /api/transactions/rules
-router.get('/rules', async (_req: Request, res: Response) => {
+router.get('/rules', async (req: Request, res: Response) => {
   try {
-    const rules = await prisma.autoMatchRule.findMany({ orderBy: { priority: 'desc' } });
+    const rules = await prisma.autoMatchRule.findMany({ where: { accountId: req.accountId }, orderBy: { priority: 'desc' } });
     res.json(rules);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -794,7 +798,7 @@ router.post('/rules', async (req: Request, res: Response) => {
     if (!pattern || !targetType || !targetId) {
       return res.status(400).json({ error: 'pattern, targetType, targetId required' });
     }
-    const rule = await prisma.autoMatchRule.create({ data: { pattern, matchType, targetType, targetId, priority } });
+    const rule = await prisma.autoMatchRule.create({ data: { accountId: req.accountId, pattern, matchType, targetType, targetId, priority } });
     res.status(201).json(rule);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
