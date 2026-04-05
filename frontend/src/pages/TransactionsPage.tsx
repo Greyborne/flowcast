@@ -292,41 +292,41 @@ function MatchPicker({
                 {/* Amount filter */}
                 <div className="col-span-2 border-t border-gray-700/50 pt-2">
                   <label className="block text-xs text-gray-500 mb-1.5">Amount Filter</label>
-                  <div className="flex gap-2 items-center flex-wrap">
+                  <div className="flex gap-1.5 items-center flex-nowrap">
                     <select
                       value={ruleForm.amountOperator ?? ''}
                       onChange={(e) => setRuleForm((f) => ({ ...f, amountOperator: (e.target.value || null) as RuleForm['amountOperator'], amountValue2: '' }))}
-                      className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white"
+                      className="bg-gray-800 border border-gray-700 rounded-lg px-1.5 py-1 text-xs text-white shrink-0"
                     >
                       <option value="">Any amount</option>
                       <option value="EXACT">Exactly</option>
                       <option value="LT">Less than</option>
-                      <option value="LTE">Less than or equal</option>
+                      <option value="LTE">≤</option>
                       <option value="GT">Greater than</option>
-                      <option value="GTE">Greater than or equal</option>
+                      <option value="GTE">≥</option>
                       <option value="BETWEEN">Between</option>
                     </select>
                     {ruleForm.amountOperator && (
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs text-gray-500">$</span>
+                      <div className="flex items-center gap-1 min-w-0">
+                        <span className="text-xs text-gray-500 shrink-0">$</span>
                         <input
                           type="text"
                           inputMode="decimal"
                           value={ruleForm.amountValue}
                           onChange={(e) => setRuleForm((f) => ({ ...f, amountValue: e.target.value }))}
                           placeholder="0.00"
-                          className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono"
+                          className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-white font-mono"
                         />
                         {ruleForm.amountOperator === 'BETWEEN' && (
                           <>
-                            <span className="text-xs text-gray-500">and $</span>
+                            <span className="text-xs text-gray-500 shrink-0">– $</span>
                             <input
                               type="text"
                               inputMode="decimal"
                               value={ruleForm.amountValue2}
                               onChange={(e) => setRuleForm((f) => ({ ...f, amountValue2: e.target.value }))}
                               placeholder="0.00"
-                              className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono"
+                              className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-white font-mono"
                             />
                           </>
                         )}
