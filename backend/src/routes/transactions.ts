@@ -301,12 +301,12 @@ router.patch('/:id/match', async (req: Request, res: Response) => {
       }
     } else if (billTemplateId || incomeSourceId) {
       const period = await prisma.payPeriod.findFirst({
-        where: { startDate: { lte: txn.date }, endDate: { gte: txn.date } },
+        where: { accountId: req.accountId, startDate: { lte: txn.date }, endDate: { gte: txn.date } },
         select: { id: true, isClosed: true },
       }) ?? await prisma.payPeriod.findFirst({
-        where: { paydayDate: { gte: txn.date } }, orderBy: { paydayDate: 'asc' },
+        where: { accountId: req.accountId, paydayDate: { gte: txn.date } }, orderBy: { paydayDate: 'asc' },
         select: { id: true, isClosed: true },
-      }) ?? await prisma.payPeriod.findFirst({ orderBy: { paydayDate: 'desc' }, select: { id: true, isClosed: true } });
+      }) ?? await prisma.payPeriod.findFirst({ where: { accountId: req.accountId }, orderBy: { paydayDate: 'desc' }, select: { id: true, isClosed: true } });
       if (period?.isClosed) {
         return res.status(409).json({ error: 'PERIOD_CLOSED', periodId: period.id, message: 'Target period is closed. Reopen it before matching.' });
       }
@@ -351,14 +351,16 @@ router.patch('/:id/match', async (req: Request, res: Response) => {
       const template = await prisma.billTemplate.findUniqueOrThrow({ where: { id: billTemplateId } });
       const period = await prisma.payPeriod.findFirst({
         where: {
+          accountId: req.accountId,
           startDate: { lte: txn.date },
           endDate: { gte: txn.date },
         },
       }) ?? await prisma.payPeriod.findFirst({
         // Fallback: nearest period by payday if transaction date doesn't fall in any period
         orderBy: { paydayDate: 'asc' },
-        where: { paydayDate: { gte: txn.date } },
+        where: { accountId: req.accountId, paydayDate: { gte: txn.date } },
       }) ?? await prisma.payPeriod.findFirst({
+        where: { accountId: req.accountId },
         orderBy: { paydayDate: 'desc' },
       });
 
@@ -366,7 +368,7 @@ router.patch('/:id/match', async (req: Request, res: Response) => {
 
       const inst = await prisma.billInstance.upsert({
         where: { payPeriodId_billTemplateId: { payPeriodId: period.id, billTemplateId: template.id } },
-        create: { payPeriodId: period.id, billTemplateId: template.id, projectedAmount: template.defaultAmount },
+        create: { accountId: req.accountId, payPeriodId: period.id, billTemplateId: template.id, projectedAmount: template.defaultAmount },
         update: {},
       });
       resolvedBillInstanceId = inst.id;
@@ -386,10 +388,10 @@ router.patch('/:id/match', async (req: Request, res: Response) => {
       // entry; actualAmount is always recomputed as the sum of all linked transactions.
       const source = await prisma.incomeSource.findUniqueOrThrow({ where: { id: incomeSourceId } });
       const period = await prisma.payPeriod.findFirst({
-        where: { startDate: { lte: txn.date }, endDate: { gte: txn.date } },
+        where: { accountId: req.accountId, startDate: { lte: txn.date }, endDate: { gte: txn.date } },
       }) ?? await prisma.payPeriod.findFirst({
-        where: { paydayDate: { gte: txn.date } }, orderBy: { paydayDate: 'asc' },
-      }) ?? await prisma.payPeriod.findFirst({ orderBy: { paydayDate: 'desc' } });
+        where: { accountId: req.accountId, paydayDate: { gte: txn.date } }, orderBy: { paydayDate: 'asc' },
+      }) ?? await prisma.payPeriod.findFirst({ where: { accountId: req.accountId }, orderBy: { paydayDate: 'desc' } });
 
       if (!period) return res.status(400).json({ error: 'No pay periods found' });
 
