@@ -48,12 +48,16 @@ router.patch('/instance/:id', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/bills/grid — all active templates + instance map for this account
+// GET /api/bills/grid — all active templates + archived templates + instance map for this account
 router.get('/grid', async (req: Request, res: Response) => {
   try {
-    const [templates, instances, groups] = await Promise.all([
+    const [templates, archivedTemplates, instances, groups] = await Promise.all([
       prisma.billTemplate.findMany({
         where: { accountId: req.accountId, isActive: true },
+        orderBy: [{ group: 'asc' }, { sortOrder: 'asc' }],
+      }),
+      prisma.billTemplate.findMany({
+        where: { accountId: req.accountId, isActive: false },
         orderBy: [{ group: 'asc' }, { sortOrder: 'asc' }],
       }),
       prisma.billInstance.findMany({
@@ -69,7 +73,7 @@ router.get('/grid', async (req: Request, res: Response) => {
       instanceMap[inst.billTemplateId][inst.payPeriodId] = inst;
     }
 
-    res.json({ templates, instanceMap, groups });
+    res.json({ templates, archivedTemplates, instanceMap, groups });
   } catch {
     res.status(500).json({ error: 'Failed to fetch bill grid' });
   }
