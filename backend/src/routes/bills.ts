@@ -192,7 +192,7 @@ router.post('/', async (req: Request, res: Response) => {
     const updated = await prisma.billTemplate.findUniqueOrThrow({ where: { id: bill.id } });
 
     // Backfill BillInstance records for all existing periods
-    if (updated.isActive && updated.dueDayOfMonth != null) {
+    if (updated.isActive && (updated.dueDayOfMonth != null || updated.isDiscretionary)) {
       const { billFallsInPeriod } = await import('../services/projectionEngine');
       const periods = await prisma.payPeriod.findMany({
         where: { accountId: req.accountId },
@@ -202,7 +202,8 @@ router.post('/', async (req: Request, res: Response) => {
       for (const period of periods) {
         const start = new Date(period.startDate);
         const end = new Date(period.endDate);
-        if (!billFallsInPeriod(updated.dueDayOfMonth, start, end)) continue;
+        // Discretionary bills appear in every period; others must fall on their due day
+        if (!updated.isDiscretionary && !billFallsInPeriod(updated.dueDayOfMonth!, start, end)) continue;
         await prisma.billInstance.upsert({
           where: { payPeriodId_billTemplateId: { payPeriodId: period.id, billTemplateId: updated.id } },
           create: {
