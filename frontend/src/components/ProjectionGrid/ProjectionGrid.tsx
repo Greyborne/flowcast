@@ -18,7 +18,7 @@ const fmtDate = (d: string) =>
   });
 
 type ActiveCell = { type: 'income' | 'bill'; id: string; mode: 'reconcile' | 'unreconcile' } | null;
-type BillGridData  = { templates: BillTemplate[]; instanceMap: Record<string, Record<string, BillGridInstance>>; groups: string[] };
+type BillGridData  = { templates: BillTemplate[]; archivedTemplates: BillTemplate[]; instanceMap: Record<string, Record<string, BillGridInstance>>; groups: string[] };
 type IncomeGridData = { sources: IncomeSource[]; entryMap: Record<string, Record<string, IncomeGridEntry>> };
 
 // ── thead + projected balance row heights (used for dual-sticky offsets) ──────
@@ -32,6 +32,7 @@ export default function ProjectionGrid() {
 
   const [activeCell,       setActiveCell]       = useState<ActiveCell>(null);
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
+  const [showArchived,     setShowArchived]     = useState(false);
   const createAdhoc = useCreateAdhocBill();
   const { activeAccount } = useAccount();
   const isMonthly = activeAccount?.periodType === 'monthly';
@@ -209,6 +210,39 @@ export default function ProjectionGrid() {
                 ))}
               </Fragment>
             ))}
+
+            {/* ── Archived bills section ── */}
+            {billGrid && (billGrid.archivedTemplates?.length ?? 0) > 0 && (
+              <Fragment>
+                <tr
+                  className="bg-gray-900/40 border-t-2 border-gray-700 cursor-pointer select-none hover:bg-gray-800/40 transition-colors"
+                  onClick={() => setShowArchived((v) => !v)}
+                >
+                  <td
+                    colSpan={visiblePeriods.length + 1}
+                    className="sticky left-0 py-1.5 px-4 text-xs font-bold text-gray-500 uppercase tracking-widest"
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <span className="transition-transform duration-150 inline-block" style={{ transform: showArchived ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+                      Archived ({billGrid.archivedTemplates.length})
+                    </span>
+                  </td>
+                </tr>
+                {showArchived && billGrid.archivedTemplates.map((template) => (
+                  <BillRow
+                    key={template.id}
+                    template={template}
+                    periods={visiblePeriods}
+                    instanceMap={billGrid.instanceMap[template.id] ?? {}}
+                    activeCell={activeCell}
+                    setActiveCell={setActiveCell}
+                    selectedPeriodId={selectedPeriodId}
+                    archived
+                    onCreateAdhoc={() => {/* no adhoc on archived */}}
+                  />
+                ))}
+              </Fragment>
+            )}
           </tbody>
         </table>
       </div>
@@ -711,7 +745,7 @@ function IncomeRow({
 // ── Bill row ──────────────────────────────────────────────────────────────────
 
 function BillRow({
-  template, periods, instanceMap, activeCell, setActiveCell, selectedPeriodId, onCreateAdhoc,
+  template, periods, instanceMap, activeCell, setActiveCell, selectedPeriodId, onCreateAdhoc, archived = false,
 }: {
   template: BillTemplate;
   periods: PayPeriod[];
@@ -720,14 +754,20 @@ function BillRow({
   setActiveCell: (c: ActiveCell) => void;
   selectedPeriodId: string | null;
   onCreateAdhoc: (payPeriodId: string) => void;
+  archived?: boolean;
 }) {
   const moveMutation = useMoveInstance();
   return (
-    <tr className="border-b border-gray-800/60 hover:bg-gray-900/40 group/row">
-      <td className="sticky left-0 bg-gray-950 py-2 px-4 text-xs text-gray-300 border-r border-gray-800 z-10 whitespace-nowrap">
-        {template.name}
-        {template.dueDayOfMonth != null && (
+    <tr className={`border-b border-gray-800/40 group/row ${archived ? 'opacity-50 hover:opacity-70' : 'hover:bg-gray-900/40'}`}>
+      <td className="sticky left-0 bg-gray-950 py-2 px-4 text-xs border-r border-gray-800 z-10 whitespace-nowrap">
+        <span className={archived ? 'line-through text-gray-500' : 'text-gray-300'}>
+          {template.name}
+        </span>
+        {!archived && template.dueDayOfMonth != null && (
           <span className="ml-1 text-gray-600 text-[10px]">({template.dueDayOfMonth}th)</span>
+        )}
+        {archived && (
+          <span className="ml-1.5 text-gray-600 text-[10px] no-underline" style={{ textDecoration: 'none' }}>archived</span>
         )}
       </td>
       {periods.map((p) => {
@@ -736,25 +776,29 @@ function BillRow({
         if (!inst) {
           return (
             <td key={p.id} className={`py-2 px-4 text-center text-gray-800 text-xs ${isSel ? 'bg-blue-950/20' : ''}`}>
-              <button
-                onClick={() => onCreateAdhoc(p.id)}
-                title={`Add ${template.name} to this period`}
-                className="opacity-0 group-hover/row:opacity-100 text-gray-600 hover:text-blue-400 transition-all text-xs leading-none"
-              >
-                +
-              </button>
+              {!archived && (
+                <button
+                  onClick={() => onCreateAdhoc(p.id)}
+                  title={`Add ${template.name} to this period`}
+                  className="opacity-0 group-hover/row:opacity-100 text-gray-600 hover:text-blue-400 transition-all text-xs leading-none"
+                >
+                  +
+                </button>
+              )}
             </td>
           );
         }
-        const mode   = activeCell?.id === inst.id ? activeCell.mode : null;
+        const mode   = archived ? null : (activeCell?.id === inst.id ? activeCell.mode : null);
         const amount = inst.isReconciled ? (inst.actualAmount ?? inst.projectedAmount) : inst.projectedAmount;
-        const billColor = amount === 0
+        const billColor = archived
           ? 'text-gray-600'
-          : template.billType === 'SAVINGS'
-            ? 'text-emerald-300'
-            : template.billType === 'TRANSFER'
-              ? 'text-sky-300'
-              : 'text-orange-300';
+          : amount === 0
+            ? 'text-gray-600'
+            : template.billType === 'SAVINGS'
+              ? 'text-emerald-300'
+              : template.billType === 'TRANSFER'
+                ? 'text-sky-300'
+                : 'text-orange-300';
         return (
           <td key={p.id} className={`py-1 px-2 text-center ${isSel ? 'bg-blue-950/20' : ''}`}>
             {mode === 'reconcile' ? (
@@ -787,8 +831,8 @@ function BillRow({
                 amount={amount}
                 isReconciled={inst.isReconciled}
                 colorClass={billColor}
-                onClick={() => setActiveCell({ type: 'bill', id: inst.id, mode: inst.isFrozen ? 'unreconcile' : 'reconcile' })}
-                title={inst.isFrozen ? 'Click to un-reconcile' : 'Click to reconcile'}
+                onClick={archived ? () => {} : () => setActiveCell({ type: 'bill', id: inst.id, mode: inst.isFrozen ? 'unreconcile' : 'reconcile' })}
+                title={archived ? template.name : (inst.isFrozen ? 'Click to un-reconcile' : 'Click to reconcile')}
               />
             )}
           </td>
