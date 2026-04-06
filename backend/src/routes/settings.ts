@@ -242,9 +242,14 @@ async function populateNewPeriods(newPaydays: Date[], periodLength: number, acco
     const month = payday.getMonth() + 1;
 
     for (const bill of activeBills) {
-      if (bill.dueDayOfMonth === null) continue;
-      if (!billFallsInPeriod(bill.dueDayOfMonth, period.startDate, period.endDate)) continue;
-      const amount = await getBillAmountForMonth(bill.id, year, month);
+      // Discretionary bills (no fixed due date) appear in every period
+      if (bill.dueDayOfMonth === null && !bill.isDiscretionary) continue;
+      if (bill.dueDayOfMonth !== null && !bill.isDiscretionary) {
+        if (!billFallsInPeriod(bill.dueDayOfMonth, period.startDate, period.endDate)) continue;
+      }
+      const amount = bill.dueDayOfMonth !== null
+        ? await getBillAmountForMonth(bill.id, year, month)
+        : bill.defaultAmount;
       await prisma.billInstance.upsert({
         where: { payPeriodId_billTemplateId: { payPeriodId: period.id, billTemplateId: bill.id } },
         create: { accountId, payPeriodId: period.id, billTemplateId: bill.id, projectedAmount: amount },
@@ -286,9 +291,9 @@ async function populateNewMonthlyPeriods(
     if (!period) continue;
 
     // In a monthly period every fixed bill falls in — the whole month is covered
+    // Discretionary bills (no fixed due date) also appear in every period
     for (const bill of activeBills) {
-      if (bill.dueDayOfMonth === null && !bill.isDiscretionary) continue; // skip truly discretionary
-      if (bill.isDiscretionary) continue;
+      if (bill.dueDayOfMonth === null && !bill.isDiscretionary) continue;
       const year  = paydayDate.getFullYear();
       const month = paydayDate.getMonth() + 1;
       const amount = await prisma.billMonthlyAmount
